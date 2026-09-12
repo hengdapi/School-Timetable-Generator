@@ -12,6 +12,7 @@ import requests
 from PySide6.QtCore import QTimer,Qt,Signal,QThread
 from PySide6.QtWidgets import QTableWidgetItem,QTableWidget,QApplication
 from packaging import version
+from functools import total_ordering
 from qfluentwidgets_pro import TableWidget,PrimaryPushButton,PushButton,FluentIcon,TextEdit
 
 from wr_settings import *
@@ -126,7 +127,7 @@ class UpdateThread(Thread):
                         f.write(chunk)
             logging.info("下载完成，自动运行安装包update.exe")
             os.startfile("update.exe")
-        except Exception as err:
+        except Exception:
             e=traceback.format_exc()
             logging.critical(f"下载更新出错：\n{e}")
 
@@ -250,6 +251,7 @@ def teacher_total_dataframe()->pd.DataFrame:
     dataframe=dataframe[[str(Time(day,lesson)) for day in range(1,6) for lesson in range(1,cfg.day_class_num+1)]]
     return dataframe
 
+@total_ordering
 class Time:
     def __init__(self,day:int=0,lesson:int=0,week:Literal["sin","dou","all"]="all",string:str|None=None):
         if string:
@@ -277,6 +279,12 @@ class Time:
         if not isinstance(other,Time):
             return False
         return self.day==other.day and self.lesson==other.lesson and self.week==other.week
+    def __lt__(self, other):
+        if not isinstance(other,Time):
+            return False
+        if self.day!=other.day:
+            return self.day<other.day
+        return self.lesson<other.lesson
     def __hash__(self):
         return hash((self.day,self.lesson,self.week))
     def __str__(self):
@@ -378,25 +386,21 @@ class Teacher:
         else:
             return self.timetable[time.dou_week] or self.timetable[time.all_week]
 
-    def check(self,time:Time,subject:Subject,failed_reasons=None,conflict_lessons=None)->bool:
-        if conflict_lessons is None:
-            conflict_lessons=set()
-        if failed_reasons is None:
-            failed_reasons=set()
-
-        origin_len=len(failed_reasons)
+    def check(self,time:Time,subject:Subject,failed_reasons:set|None=None,conflict_lessons:set|None=None)->bool:
+        res=True
         if not self.is_busy(time):
             return True
-        if not self.left_num[subject][time] or not self.timetable[time] or self.timetable[time][0][1]!=subject:
+        if self.left_num[subject][time]<=0 or not self.timetable[time] or self.timetable[time][0][1]!=subject:
+            res=False
+            if failed_reasons is None:
+                return False
             for conflict_time in (time.sin_week,time.dou_week,time.all_week) if time.all else (time,time.all_week):
                 if not self.get_lessons(conflict_time):
                     continue
                 for conflict_class,conflict_subject in self.get_lessons(conflict_time):
                     failed_reasons.add(f"课程冲突：{subject} 的任课老师 {self} 在 {conflict_time} 有 {conflict_class} 的 {conflict_subject} 课")
                     conflict_lessons.add((conflict_class,conflict_time))
-        if len(failed_reasons)>origin_len:
-            return False
-        return True
+        return res
 
     def remove_lesson(self,time:Time,clas:Class|None=None):
         """
@@ -454,22 +458,20 @@ class Subject:
         self.time_list[time]-=1
         self.timetable[time].remove(clas)
 
-    def get_continue_times(self,clas:Class) -> int:
-        """
-        获取本学科在某班的连堂次数
-        """
-        times=0
-        for time,subjects in clas.timetable.items():
-            if subjects!=[self]:
-                continue
-            if time.lesson!=1 and (cfg.allow_noon_continuous.value or time.lesson!=cfg.morning_class_num.value+1):
-                if clas.get_lessons(time.prev)==[self]:
-                    times+=1
-            if (cfg.allow_noon_continuous.value or time.lesson!=cfg.morning_class_num.value) and time.lesson!=cfg.day_class_num:
-                if clas.get_lessons(time.next)==[self]:
-                    times+=1
-        return times
-
+    def timetable_dataframe(self,class_scope:list[Class]) -> pd.DataFrame:
+        data=copy.deepcopy(table_style())
+        for time,classes in self.timetable.items():
+            for clas in classes:
+                if clas not in class_scope:
+                    continue
+                if data.loc[time.to_str(False,True),time.to_str(True,False)]:
+                    lines=data.loc[time.to_str(False,True),time.to_str(True,False)].split("\n")
+                    lines[0]+=f"/{time.to_str(False,False,True)}{clas}"
+                    lines[1]+=f"/{time.to_str(False,False,True)}{clas.get_teacher(self)}"
+                    data.loc[time.to_str(False,True),time.to_str(True,False)]="\n".join(lines)
+                else:
+                    data.loc[time.to_str(False,True),time.to_str(True,False)]=f"{time.to_str(False,False,True)}{clas}\n{time.to_str(False,False,True)}{clas.get_teacher(self)}"
+        return data
 
 class Class:
     def __init__(self,name,teachers:dict[str,Teacher]):
@@ -489,6 +491,8 @@ class Class:
         self.half_subjects: set[Subject]=set()
         self.continue_num: dict[Subject,int]={}
         self.set_lessons: dict[Time,Subject]={}
+        self.order_subjects_scope: dict[Subject,list[Class]]={}
+        self.everyday_subjects: set[Subject]=set()
 
     def __str__(self):
         return self.name
@@ -510,7 +514,7 @@ class Class:
     def get_teacher(self,subject:Subject):
         return self.teachers[subject.name]
 
-    def get_subject_num(self,subject:Subject)->int:
+    def get_subject_left_num(self,subject:Subject)->int:
         return self.left_subjects.count(subject)
 
     def add_lesson(self,time:Time,subject:Subject):
@@ -579,6 +583,38 @@ class Class:
                 self.add_lesson(time1.sin_week,subjects2[0])
                 self.add_lesson(time1.dou_week,subjects2[1])
 
+    def get_continue_times(self,subject:Subject) -> int:
+        """
+        获取本班某学科的连堂次数
+        """
+        times=0
+        for time,subjects in self.timetable.items():
+            if subjects!=[subject]:
+                continue
+            if time.lesson!=1 and (cfg.allow_noon_continuous.value or time.lesson!=cfg.morning_class_num.value+1):
+                if self.get_lessons(time.prev)==[subject]:
+                    times+=1
+        return times
+
+    def count_subject(self,subject:Subject,start:Time=Time(1,1),end:Time=Time(5,cfg.day_class_num)):
+        cnt=0
+        time=start
+        while time<=end:
+            subjects=self.get_lessons(time)
+            if subjects:
+                cnt+=subjects.count(subject)
+            time=time.next
+            if time==Time(1,1):
+                break
+        return cnt
+
+    @property
+    def empty(self)->bool:
+        for time,subjects in self.timetable.items():
+            if subjects:
+                return False
+        return True
+
     @property
     def timetable_dataframe(self)->pd.DataFrame:
         data=copy.deepcopy(table_style())
@@ -615,70 +651,6 @@ class LessonInfoEncoder(json.JSONEncoder):
             return o.__json__()
         return super().default(o)
 
-class Rule_type:
-    set_time="set_time"
-    avoid_time="avoid_time"
-    priority_time="priority_time"
-    set_num="set_num"
-    avoid_subject="avoid_subject"
-    avoid_teacher="avoid_teacher"
-    set_continue="set_continue"
-    half_num="half_num"
-
-rule_types={
-    "set_time": "{time}|必须排|{subject}|学科",
-    "avoid_time": "{time}|不能排|{subject}|学科",
-    "priority_time": "{time}|优先排|{subject}|学科",
-    "set_num": "{subject}|学科同一时间最多排|{number}|节课",
-    "avoid_subject": "{subjectA}|学科与|{subjectB}|学科不能排在同一时间",
-    "avoid_teacher": "{teacherA}|老师与|{teacherB}|老师不能在同一时间有课",
-    "set_continue": "{subject}|学科每周连堂|{number}|次",
-    "half_num": "{subject}|学科两周排一次课（即单双周）"
-}
-
-class Rule:
-    def __init__(self,**kwargs):
-        self.type=kwargs["type"]
-        self.time=self.subject=self.number=self.subjectA=self.subjectB=self.teacherA=self.teacherB=None
-        if "scope" in kwargs:
-            self.scope=[lesson_info.classes[class_name] for class_name in kwargs["scope"]]
-        else:
-            self.scope:list[Class]=lesson_info.class_lst
-        if self.type in [Rule_type.set_time,Rule_type.avoid_time,Rule_type.priority_time]:
-            self.time=Time(string=kwargs["time"])
-        if self.type in [Rule_type.set_time,Rule_type.avoid_time,Rule_type.priority_time,Rule_type.set_num,Rule_type.set_continue,Rule_type.half_num]:
-            self.subject=lesson_info.subjects.get(kwargs["subject"])
-        if self.type in [Rule_type.set_num,Rule_type.set_continue]:
-            self.number=kwargs["number"]
-        if self.type==Rule_type.avoid_subject:
-            self.subjectA=lesson_info.subjects.get(kwargs["subjectA"])
-            self.subjectB=lesson_info.subjects.get(kwargs["subjectB"])
-        if self.type==Rule_type.avoid_teacher:
-            self.teacherA=lesson_info.teachers.get(kwargs["teacherA"])
-            self.teacherB=lesson_info.teachers.get(kwargs["teacherB"])
-
-    def __str__(self):
-        ans=rule_types[self.type].replace("|","").replace("{"," ").replace("}"," ")
-        for string in self.__dict__:
-            if string in ["type","scope"] or self.__dict__[string] is None:
-                continue
-            ans=ans.replace(string,str(self.__dict__[string]))
-        return ans
-
-    def to_dict(self)->dict:
-        ans={}
-        for string in self.__dict__:
-            if self.__dict__[string] is None or string=="scope":
-                continue
-            ans[str(string)]=str(self.__dict__[string])
-        ans["scope"]=[clas.name for clas in self.scope]
-        return ans
-
-    def __eq__(self, other):
-        if not isinstance(other,Rule):
-            return False
-        return self.type==other.type and self.__dict__==other.__dict__
-
 # 解析课程信息
 class LessonInfo:
     def __init__(self):
@@ -690,7 +662,6 @@ class LessonInfo:
         self.class_names:list[str]=[]
         self.class_lst:list[Class]=[]
         self.grades:dict[str,Grade]={}
-        self.rules: list[Rule]=[]
         self.saved=True
         logging.info("正在解析课程信息...")
         lessons=cfg.lessons_info.value
@@ -746,25 +717,6 @@ class LessonInfo:
         logging.debug("课程信息解析完成")
 lesson_info=LessonInfo()
 
-
-
-for i in range(len(cfg.rules.value)):
-    rule=Rule(**cfg.rules.value[i])
-    cfg.rules.value[i]=rule.to_dict()
-    lesson_info.rules.append(rule)
-    for clas in rule.scope:
-        if rule.type==Rule_type.set_time:
-            clas.set_lessons[rule.time]=rule.subject
-        elif rule.type==Rule_type.priority_time:
-            if rule.time not in clas.priority_subjects:
-                clas.priority_subjects[rule.time]=[rule.subject]
-            else:
-                clas.priority_subjects[rule.time].append(rule.subject)
-        elif rule.type==Rule_type.half_num:
-            clas.half_subjects.add(rule.subject)
-        elif rule.type==Rule_type.set_continue:
-            clas.continue_num[rule.subject]=int(rule.number)
-save_settings()
 logging.info("课程信息解析完毕，生成初始化完成")
 
 def diff_cfg(new_classes:list,new_teachers:list,new_subjects:list)->tuple[set,set,set]:
@@ -778,8 +730,20 @@ def del_cfg_diff(diff_classes:set,diff_teachers:set,diff_subjects:set)->None:
     for grade,classes in cfg.grades_info.value.items():
         cfg.grades_info.value[grade]=list(set(classes)-diff_classes)
         cfg.grades_info.value[grade].sort(key=lambda clas:lesson_info.class_names.index(clas))
-    new_rules=copy.copy(cfg.rules.value)
+    new_rules=[]
     for rule in cfg.rules.value:
-        if rule.get("subject") in diff_subjects or rule.get("subjectA") in diff_subjects or rule.get("subjectB") in diff_subjects or rule.get("teacherA") in diff_teachers or rule.get("teacherB") in diff_teachers:
-            new_rules.remove(rule)
+        flag=True
+        for arg,value in rule.items():
+            if isinstance(value,list):
+                value=list(set(value)-diff_classes-diff_teachers-diff_subjects)
+                rule[arg]=value
+            elif value in diff_classes or value in diff_teachers or value in diff_subjects:
+                flag=False
+                break
+        if not flag:
+            continue
+        for class_name in copy.copy(rule["scope"]):
+            if class_name in diff_classes:
+                rule["scope"].remove(class_name)
+        new_rules.append(rule)
     cfg.rules.value=new_rules

@@ -5,6 +5,7 @@
 - LessonStoragePane      暂存区容器（接收从表格拖来的课程）
 - DraggableLessonCard    暂存区的可拖拽卡片（支持点击/拖拽激活课表高亮）
 """
+from typing import Optional,Iterable
 
 from PySide6.QtCore import QMimeData,QPoint
 from PySide6.QtGui import (
@@ -418,3 +419,79 @@ def display_teachers_timetable(teacher:Teacher,tablewidget:QTableWidget,show_sep
                 dou_text="\n".join(dou_text)
             tablewidget.setCellWidget(lesson-1,day-1,sindou_widget(sin_text,dou_text,tablewidget.font(),show_separator))
             curr_item.setText("")
+
+class ClassMultiSelectionCombobox(MultiSelectionTreeComboBox):
+    def __init__(
+        self,
+        items: Optional[Iterable] = None,
+        placeholderText: Optional[str] = None,
+        parent: Optional[QWidget] = None,
+        check_all:bool=False
+    ):
+        super().__init__(items, placeholderText, parent)
+        self.addItems(cfg.grades_info.value)
+        self.setAllItemsChecked(check_all)
+
+    def checkedClasses(self)->list[Class]:
+        return [lesson_info.classes[class_name] for class_name in self.checkedTexts()]
+
+class TimeMultiSelectionCombobox(MultiSelectionTreeComboBox):
+    """时间多选框：弹出“空课表”网格（列 = 星期，行 = 上午/下午第 x 节）。
+
+    每个空格内是一个多选框，文本为完整的 ``str(Time)``（如“星期一上午第1节”）。
+    勾选完成后用 :meth:`checkedTimes` 取回全部 :class:`Time`。
+    """
+
+    def __init__(
+        self,
+        placeholderText: Optional[str] = None,
+        parent: Optional[QWidget] = None
+    ):
+        super().__init__(None, placeholderText, parent)
+        self.setSearchEnabled(False)   # 课表网格无需搜索框
+
+    # ------------------------------------------------------------------ 弹层
+    def _hasPopupContent(self) -> bool:
+        # 网格数据不来自 _rootItems，始终允许弹出
+        return True
+
+    def _createPopup(self):
+        colLabels = [days[day] for day in range(1, 6)]
+        rowLabels: list[str] = []
+        cellTexts: dict[tuple[int, int], str] = {}
+        for row, lesson in enumerate(range(1, cfg.day_class_num + 1)):
+            rowLabels.append(lesson2str(lesson))
+            for col, day in enumerate(range(1, 6)):
+                cellTexts[(row, col)] = str(Time(day, lesson))
+        return GridMultiSelectPopup(
+            self, rowLabels, colLabels, cellTexts, set(self.checkedTexts())
+        )
+
+    # ------------------------------------------------------------------ 选择
+    def setCheckedTexts(self, texts):
+        """按文本设置勾选（时间控件的数据不在树里，覆写以支持回填）。"""
+        if isinstance(texts, str):
+            texts = [texts]
+        self._checked = [TreeComboItem(text=t) for t in texts]
+        self._updateText()
+        self.checkedItemsChanged.emit(list(self._checked))
+        self.checkedTextsChanged.emit(self.checkedTexts())
+
+    def setCheckedTimes(self, times: Iterable[Time]):
+        """按 :class:`Time` 列表设置勾选（``setCheckedTexts`` 的语义封装）。"""
+        self.setCheckedTexts([str(t) for t in times])
+
+    def setAllItemsChecked(self, checked: bool = True):
+        """全选 / 清空所有时间格。"""
+        if checked:
+            texts = [
+                str(Time(day, lesson))
+                for lesson in range(1, cfg.day_class_num + 1)
+                for day in range(1, 6)
+            ]
+        else:
+            texts = []
+        self.setCheckedTexts(texts)
+
+    def checkedTimes(self) -> list[Time]:
+        return [Time(string=time_str) for time_str in self.checkedTexts()]

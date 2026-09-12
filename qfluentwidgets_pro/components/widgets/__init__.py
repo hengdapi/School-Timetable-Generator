@@ -216,3 +216,4 @@ from .teaching_tip import (
 from .toast import Toast, ToastColor, ToastPosition
 from .tool_tip import ToolTip, ToolTipFilter, ToolTipPosition
 from .tree_view import TreeItemDelegate, TreeView, TreeWidget
+from .tree_combo_box import GridMultiSelectPopup, MultiSelectionTreeComboBox, TreeComboBox, TreeComboItem

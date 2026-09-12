@@ -930,8 +930,25 @@ class MultiSelectComboBoxMenu(RoundMenu):
     def _onItemClicked(self, item):
         """Override to prevent menu from closing on item click"""
         action = item.data(Qt.UserRole)
-        if action and action.isEnabled():
-            action.trigger()
+        if not (action and action.isEnabled()):
+            return
+
+        checked = not action.isChecked()
+
+        # 勾选框的视觉状态由 CheckBoxMenuItemDelegate 通过模型(CheckStateRole)翻转，
+        # 选中集合由 MultiSelectComboBox._onItemClicked 维护，二者都不依赖 QAction。
+        # 这里仅静默同步 QAction 的勾选状态并屏蔽 changed 信号：
+        # 直接调用 action.trigger() 会触发 action.changed -> RoundMenu._onActionChanged，
+        # 后者会在弹窗已显示时重新计算尺寸/重排，导致：
+        #   1) 弹窗底部被动画残留的窗口遮罩裁掉，最后几项显示不全、无法点选；
+        #   2) 点击后滚动条被强制回到顶部、出现渲染不完整的问题。
+        action.blockSignals(True)
+        action.setChecked(checked)
+        action.blockSignals(False)
+
+        # 维持与 action.trigger() 一致的公开信号行为，但不触发 changed
+        action.toggled.emit(checked)
+        action.triggered.emit()
 
     def exec(self, pos, ani=True, aniType=MenuAnimationType.DROP_DOWN):
         self.view.adjustSize(pos, aniType)

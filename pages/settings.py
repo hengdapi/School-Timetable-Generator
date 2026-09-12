@@ -1,12 +1,9 @@
 # coding=utf-8
-from PySide6.QtCore import QTime
-
-from qfluentwidgets_pro.components.date_time.picker_base import SeparatorWidget
-from locals import *
-from style import *
-from wr_settings import *
 import shutil
-import traceback
+
+from PySide6.QtCore import QTime
+from core.rules import *
+from pages.ui_widgets import *
 
 class RuleMessageBox(MessageBoxBase):
     def __init__(self,parent=None,edit=False,rule:Rule=None):
@@ -26,65 +23,32 @@ class RuleMessageBox(MessageBoxBase):
 
         self.rule_combo=ComboBox()
         self.rule_combo.setPlaceholderText("请选择规则类型")
-        for type,name in rule_types.items():
-            self.rule_combo.addItem(name.replace("|"," "),userData=[name,type])
+        for type,rule_class in rule_types.items():
+            self.rule_combo.addItem(rule_class.text.replace("|"," "),userData=[rule_class,type])
         add_widget(self.rule_combo,self.viewLayout,0)
         if edit:
-            self.rule_combo.setCurrentText(rule_types[rule.type].replace("|"," "))
+            self.rule_combo.setCurrentText(rule.text.replace("|"," "))
             self.show_rule_strings()
         else:
             self.rule_combo.setCurrentIndex(-1)
         self.rule_combo.currentIndexChanged.connect(self.show_rule_strings)
 
     def check_rule(self,new_rule:Rule):
-        new_type=new_rule.type
         rules=lesson_info.rules
         if self.edit and self.curr_rule in rules:
             rules.remove(self.curr_rule)
         if new_rule==self.curr_rule:
             return True,None
-        if not self.edit and new_rule in rules:
+        if not new_rule.validate():
             return False,new_rule
         for rule in rules:
-            if not {lesson_info.classes[item.text] for item in self.scope_combo.selectedItems()}&set(rule.scope):
-                continue
-            if new_type==Rule_type.set_time:
-                if rule.type in [Rule_type.set_time,Rule_type.priority_time] and rule.time==new_rule.time or\
-                        rule.type==Rule_type.avoid_time and rule.time==new_rule.time and rule.subject==new_rule.subject:
-                    return False,rule
-            elif new_type==Rule_type.avoid_time:
-                if rule.type in [Rule_type.set_time,Rule_type.priority_time] and rule.subject==new_rule.subject and rule.time==new_rule.time:
-                    return False,rule
-            elif new_type==Rule_type.priority_time:
-                if rule.type==Rule_type.priority_time and rule.time==new_rule.time:
-                    return False,rule
-                elif rule.type==Rule_type.set_time and rule.time==new_rule.time:
-                    return False,rule
-            elif new_type==Rule_type.set_num:
-                if rule.type==Rule_type.set_num and rule.subject==new_rule.subject:
-                    return False,rule
-            elif new_type==Rule_type.avoid_subject:
-                if new_rule.subjectA==new_rule.subjectB:
-                    return False,new_rule
-                if rule.type==Rule_type.avoid_subject and {rule.subjectA,rule.subjectB}=={new_rule.subjectA,new_rule.subjectB}:
-                    return False,rule
-            elif new_type==Rule_type.avoid_teacher:
-                if new_rule.teacherA==new_rule.teacherB:
-                    return False,new_rule
-                if rule.type==Rule_type.avoid_teacher and {rule.teacherA,rule.teacherB}=={new_rule.teacherA,new_rule.teacherB}:
-                    return False,rule
-            elif new_type==Rule_type.set_continue:
-                for rule in rules:
-                    if rule.type==Rule_type.set_continue and rule.subject==new_rule.subject:
-                        return False,rule
-            elif new_type==Rule_type.half_num:
-                for rule in rules:
-                    if rule.type==Rule_type.half_num and rule.subject==new_rule.subject:
-                        return False,rule
+            if not rule.check_conflict(new_rule):
+                return False,rule
         return True,None
 
     def show_rule_strings(self):
-        name=self.rule_combo.currentData()[0]
+        rule_class:Rule=self.rule_combo.currentData()[0]
+        name=self.rule_combo.currentData()[0].text
         for layout in self.string_layouts:
             while layout.count():
                 item=layout.takeAt(0)
@@ -93,63 +57,98 @@ class RuleMessageBox(MessageBoxBase):
                     item.widget().deleteLater()
         if hasattr(self,"scope_combo"):
             self.scope_combo.deleteLater()
+            self.scope_label.deleteLater()
+            self.scope_tip.deleteLater()
+            self.desc_label.deleteLater()
         self.string_elements.clear()
+
+        self.desc_label=write(f"规则说明：{rule_class.desc}",self,self.viewLayout,0)
+        self.desc_label.setFont(QFont("Microsoft YaHei",12))
         name=name.split("|")
-        for string in name:
+        string_layout=QGridLayout()
+        for i in range(len(name)):
+            string=name[i]
             if string[0]=="{" and string[-1]=="}":
                 string_name=string[1:-1]
-                string_layout=QHBoxLayout()
                 self.viewLayout.addLayout(string_layout)
-                name_label=write(f"请填写{string_name}字段：",self,string_layout)
-                combo=EditableComboBox()
+                name_label=BodyLabel()
+                name_label.setFont(fonts.write)
+                name_label.setMaximumWidth(200)
+                name_label.setText(f"请填写{string_name}字段：")
+                string_layout.addWidget(name_label,i,0,alignment=Qt.AlignmentFlag.AlignLeft)
+                if rule_class.args[string_name].type=="multi":
+                    input_widget=MultiSelectComboBox()
+                elif rule_class.args[string_name].type=="single":
+                    input_widget=EditableComboBox()
+                elif rule_class.args[string_name].type=="int":
+                    input_widget=SpinBox()
+                    input_widget.setRange(1,1000)
+                else:
+                    input_widget=LineEdit()
+                items=[]
                 if "subject" in string_name:
                     items=cfg.subjects_info.value
                 elif "time" in string_name:
-                    items=self.times
-                elif "number" in string_name:
-                    items=[str(i) for i in range(1,len(cfg.lessons_info.value)+1)]
+                    input_widget=TimeMultiSelectionCombobox()
                 elif "teacher" in string_name:
                     items=cfg.teachers_info.value
-                elif "class" in string_name:
-                    items=[clas["班级"] for clas in cfg.lessons_info.value]
-                else:
-                    items=["无可选项"]
-                combo.addItems(items)
+                if isinstance(input_widget,(EditableComboBox,MultiSelectComboBox)):
+                    input_widget.addItems(items)
+                    if isinstance(input_widget,EditableComboBox):
+                        input_widget.setCompleter(QCompleter(items,input_widget))
                 if self.edit:
-                    combo.setCurrentText(str(getattr(self.curr_rule,string_name)))
-                completer=QCompleter(items,combo)
-                combo.setCompleter(completer)
-                add_widget(combo,string_layout)
+                    if isinstance(input_widget,EditableComboBox):
+                        input_widget.setCurrentText(str(getattr(self.curr_rule,string_name)))
+                    elif isinstance(input_widget,MultiSelectComboBox):
+                        if isinstance(input_widget,TimeMultiSelectionCombobox):
+                            input_widget.setCheckedTexts([str(time) for time in getattr(self.curr_rule,string_name)])
+                        else:
+                            input_widget.setSelectedIndices({items.index(str(item)) for item in getattr(self.curr_rule,string_name)})
+                    elif isinstance(input_widget,SpinBox):
+                        input_widget.setValue(getattr(self.curr_rule,string_name))
+                input_widget.setMaximumWidth(400)
+                string_layout.addWidget(input_widget,i,1)
                 self.string_layouts.append(string_layout)
-                self.string_elements[string_name]=[name_label,combo]
-        scope_layout=QHBoxLayout()
-        self.viewLayout.addLayout(scope_layout)
-        write("请选择规则生效范围：",self,scope_layout)
-        self.scope_combo=MultiSelectComboBox()
-        self.scope_combo.setMaximumWidth(300)
-        self.scope_combo.addItems(lesson_info.class_names)
+                self.string_elements[string_name]=[name_label,input_widget]
+        self.scope_label=BodyLabel()
+        self.scope_label.setText("请选择规则生效范围：")
+        self.scope_label.setFont(fonts.write)
+        self.scope_label.setMaximumWidth(200)
+        string_layout.addWidget(self.scope_label,i+1,0,alignment=Qt.AlignmentFlag.AlignLeft)
+        self.scope_combo=ClassMultiSelectionCombobox()
+        self.scope_combo.setMaximumWidth(400)
         if self.edit:
-            self.scope_combo.setSelectedIndices({lesson_info.class_names.index(clas.name) for clas in self.curr_rule.scope})
+            self.scope_combo.setCheckedTexts([clas.name for clas in self.curr_rule.scope])
         else:
-            self.scope_combo.setSelectedIndices({i for i in range(len(lesson_info.classes))})
-        add_widget(self.scope_combo,scope_layout)
-        write("为范围之外的班级排课时，程序将不会检查是否满足本条规则",self,self.viewLayout,0)
+            self.scope_combo.setAllItemsChecked(True)
+        string_layout.addWidget(self.scope_combo,i+1,1)
+        self.scope_tip=write("为范围之外的班级排课时，程序将不会检查是否满足本条规则",self,self.viewLayout,0)
 
     def validate(self) -> bool:
         name,kind=self.rule_combo.currentData()
         new_rule={"type":kind}
         for string_name,elements in self.string_elements.items():
-            combo: ComboBox=elements[1]
-            if combo.currentText() not in [item.text for item in combo.items]:
-                return False
-            new_rule[string_name]=combo.currentText()
-        if not self.scope_combo.selectedItems():
+            input_widget=elements[1]
+            if isinstance(input_widget,EditableComboBox):
+                if input_widget.currentText() not in [item.text for item in input_widget.items]:
+                    settings_error(self,f"请填写字段“{string_name}”")
+                    return False
+                new_rule[string_name]=input_widget.currentText()
+            elif isinstance(input_widget,MultiSelectComboBox):
+                if not input_widget.selectedItems():
+                    settings_error(self,f"请填写字段“{string_name}”")
+                    return False
+                new_rule[string_name]=[item.text for item in input_widget.selectedItems()]
+            elif isinstance(input_widget,SpinBox):
+                new_rule[string_name]=input_widget.value()
+        if not self.scope_combo.checkedItems():
+            settings_error(self,"请选择规则生效范围")
             return False
-        new_rule["scope"]=[item.text for item in self.scope_combo.selectedItems()]
-        self.new_rule=Rule(**new_rule)
+        new_rule["scope"]=self.scope_combo.checkedTexts()
+        self.new_rule=get_rule(**new_rule)
         success,rule=self.check_rule(self.new_rule)
         if not success:
-            settings_error(self,"新规则与现有规则冲突或重复："+str(rule))
+            settings_error(self,"新规则冲突、重复或不合法："+str(rule))
         return success
 
 class GradeMsgbox(MessageBoxBase):
@@ -342,14 +341,11 @@ class Settings(QFrame):
         logging.info("用户点击添加规则按钮")
         rule_dialog=RuleMessageBox(self)
         if rule_dialog.exec():
-            new_rule=rule_dialog.new_rule
-            lesson_info.rules.append(new_rule)
-            self.rule_list.addItem(str(new_rule))
-            # 获取刚添加的项并设置userData
-            item=self.rule_list.item(self.rule_list.count()-1)
-            item.setData(Qt.UserRole,new_rule)
-            cfg.rules.value.append(new_rule.to_dict())
+            cfg.rules.value.append(rule_dialog.new_rule.to_dict())
             save_settings()
+            # 重新应用规则，让新规则的副作用立刻写到各班级对象上
+            apply_rules()
+            self.show_rules()
             logging.info("成功添加规则")
         else:
             logging.info("用户取消添加规则")
@@ -360,13 +356,23 @@ class Settings(QFrame):
         logging.info("用户编辑规则")
         rule_dialog=RuleMessageBox(self,True,curr_rule)
         if rule_dialog.exec():
-            new_rule=rule_dialog.new_rule
-            lesson_info.rules.append(new_rule)
-            curr_item.setText(str(new_rule))
-            curr_item.setData(Qt.UserRole,new_rule)
-            cfg.rules.value.remove(curr_rule.to_dict())
-            cfg.rules.value.append(new_rule.to_dict())
+            rule_index=self.rule_list.row(curr_item)
+            old_rule=curr_rule.to_dict()
+            new_rule=rule_dialog.new_rule.to_dict()
+            # 原地替换，保持规则的原有顺序不变
+            if old_rule in cfg.rules.value:
+                cfg.rules.value[cfg.rules.value.index(old_rule)]=new_rule
+            elif 0<=rule_index<len(cfg.rules.value):
+                cfg.rules.value[rule_index]=new_rule
+            else:
+                cfg.rules.value.append(new_rule)
             save_settings()
+            # 重新应用规则，让编辑结果立刻写到各班级对象上
+            apply_rules()
+            self.show_rules()
+            # 保持编辑后规则的选中状态
+            if rule_index<self.rule_list.count():
+                self.rule_list.setCurrentRow(rule_index)
             logging.info("规则编辑成功")
         else:
             logging.debug("用户取消编辑规则")
@@ -376,12 +382,13 @@ class Settings(QFrame):
             selected_rule=self.rule_list.selectedItems()[0]
             rule_data=selected_rule.data(Qt.UserRole)
             logging.info("用户删除规则")
-            lesson_info.rules.remove(rule_data)
+            cfg.rules.value.remove(rule_data.to_dict())
+            save_settings()
+            # 重新应用规则，把被删除规则产生的副作用一并清除
+            apply_rules()
             self.rule_list.takeItem(self.rule_list.row(selected_rule))
             self.del_rule_button.setEnabled(bool(len(lesson_info.rules)))
             self.edit_rule_button.setEnabled(bool(len(lesson_info.rules)))
-            cfg.rules.value.remove(rule_data.to_dict())
-            save_settings()
             logging.info("规则删除成功")
         except Exception as error:
             e=traceback.format_exc()
@@ -408,8 +415,8 @@ class Settings(QFrame):
         cfg.rules.value=new_rules
         save_settings()
 
-        # 同步更新 lesson_info.rules 的顺序
-        lesson_info.rules=[Rule(**r) for r in new_rules]
+        # 重新应用规则，同步 lesson_info.rules 及各班级的规则数据
+        apply_rules()
 
     def lesson_time_changed(self,lesson:int,end:bool,time:QTime):
         cfg.lessons_time.value[str(lesson)][end]=[time.hour(),time.minute()]
