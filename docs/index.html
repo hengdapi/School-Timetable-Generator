@@ -162,6 +162,46 @@
   /* SVG Icon System */
   .ico{width:20px;height:20px;vertical-align:-3px;margin-right:5px;flex-shrink:0}
   .ico-lg{width:34px;height:34px;vertical-align:-7px;margin-right:10px;flex-shrink:0}
+  .rule-tile .new{
+    position:absolute;top:9px;right:9px;font-size:10px;font-weight:800;
+    padding:2px 7px;border-radius:8px;background:rgba(160,197,229,.16);
+    color:var(--accent);border:1px solid rgba(160,197,229,.3)
+  }
+
+  /* ─── What's New Grid ─── */
+  .whatsnew-sec{background:linear-gradient(180deg,rgba(160,197,229,.06),rgba(160,197,229,.01))}
+  .whatsnew-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  .whatsnew-card{
+    background:var(--card);border:1px solid var(--border);border-radius:16px;
+    padding:30px 24px;position:relative;overflow:hidden;
+    transition:transform .3s,border-color .3s,box-shadow .3s
+  }
+  .whatsnew-card::before{
+    content:'';position:absolute;top:0;left:0;right:0;height:3px;
+    background:linear-gradient(90deg,var(--accent),transparent);opacity:.7
+  }
+  .whatsnew-card:hover{transform:translateY(-6px);border-color:rgba(160,197,229,.3);box-shadow:0 14px 44px rgba(0,0,0,.35)}
+  .whatsnew-card h4{font-size:17px;font-weight:800;margin-bottom:10px;display:flex;align-items:center;gap:6px;padding-right:56px}
+  .whatsnew-card p{font-size:14px;color:var(--text-dim);line-height:1.75}
+  .new-tag{
+    position:absolute;top:14px;right:14px;font-size:10px;font-weight:800;letter-spacing:.8px;
+    padding:3px 9px;border-radius:9px;background:rgba(160,197,229,.16);color:var(--accent);
+    border:1px solid rgba(160,197,229,.3)
+  }
+  .new-tag.inline{position:static;margin-left:8px;vertical-align:middle}
+
+  /* ─── CSES Banner ─── */
+  .cses-banner{
+    margin-top:20px;display:flex;align-items:center;gap:20px;
+    background:linear-gradient(135deg,rgba(160,197,229,.12),rgba(106,172,224,.04));
+    border:1px solid rgba(160,197,229,.25);border-radius:16px;padding:26px 28px
+  }
+  .cses-banner .cses-ico{
+    flex-shrink:0;width:52px;height:52px;display:flex;align-items:center;justify-content:center;
+    border-radius:14px;background:rgba(160,197,229,.15);color:var(--accent)
+  }
+  .cses-banner h4{font-size:18px;font-weight:800;margin-bottom:6px;display:flex;align-items:center;flex-wrap:wrap}
+  .cses-banner p{font-size:14px;color:var(--text-dim);margin:0}
 
   /* ─── Settings Carousel ─── */
   .settings-showcase{display:flex;align-items:center;gap:20px;justify-content:center}
@@ -244,6 +284,8 @@
     .highlight-row,.highlight-row.reverse{flex-direction:column;gap:32px}
     .highlight-img{max-width:100%}
     .rules-bento{grid-template-columns:repeat(2,1fr)}
+    .whatsnew-grid{grid-template-columns:1fr}
+    .cses-banner{flex-direction:column;text-align:center}
     .drag-grid{grid-template-columns:1fr}
     .drag-card.wide{max-width:100%}
     .export-grid{grid-template-columns:1fr}
@@ -273,6 +315,11 @@
     <g id="ico-cycle"><path d="M5 12a7 7 0 017-7" fill="none" stroke="#a0c5e5" stroke-width="1.8" stroke-linecap="round"/><polyline points="8,5 12,5 12,9" fill="none" stroke="#a0c5e5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 12a7 7 0 01-7 7" fill="none" stroke="#a0c5e5" stroke-width="1.8" stroke-linecap="round"/><polyline points="16,19 12,19 12,15" fill="none" stroke="#a0c5e5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></g>
     <g id="ico-building"><path d="M4 21V8a1 1 0 011-1h14a1 1 0 011 1v13" fill="none" stroke="#a0c5e5" stroke-width="1.8" stroke-linecap="round"/><path d="M9 21V10h6v11" fill="none" stroke="#a0c5e5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></g>
     <g id="ico-chart"><rect x="5" y="13" width="3" height="8" rx="1" fill="none" stroke="#a0c5e5" stroke-width="1.8" stroke-linecap="round"/><rect x="10.5" y="8" width="3" height="13" rx="1" fill="none" stroke="#a0c5e5" stroke-width="1.8" stroke-linecap="round"/><rect x="16" y="4" width="3" height="17" rx="1" fill="none" stroke="#a0c5e5" stroke-width="1.8" stroke-linecap="round"/></g>
+    <g id="ico-bell"><path d="M18 8.5a6 6 0 10-12 0c0 6.5-2.5 8.5-2.5 8.5h17S18 15 18 8.5" fill="none" stroke="#a0c5e5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M13.7 20.5a2 2 0 01-3.4 0" fill="none" stroke="#a0c5e5" stroke-width="1.8" stroke-linecap="round"/></g>
+    <g id="ico-target"><circle cx="12" cy="12" r="9" fill="none" stroke="#a0c5e5" stroke-width="1.8"/><circle cx="12" cy="12" r="5" fill="none" stroke="#a0c5e5" stroke-width="1.8"/><circle cx="12" cy="12" r="1.6" fill="#a0c5e5"/></g>
+    <g id="ico-sliders"><path d="M4 7h16M4 17h16" fill="none" stroke="#a0c5e5" stroke-width="1.8" stroke-linecap="round"/><circle cx="9" cy="7" r="2.4" fill="none" stroke="#a0c5e5" stroke-width="1.8"/><circle cx="15" cy="17" r="2.4" fill="none" stroke="#a0c5e5" stroke-width="1.8"/></g>
+    <g id="ico-alert"><path d="M12 3l9.5 16.5H2.5L12 3z" fill="none" stroke="#a0c5e5" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 9.5v4.5" fill="none" stroke="#a0c5e5" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="17" r="1" fill="#a0c5e5"/></g>
+    <g id="ico-file"><path d="M6 2.5h7.5L18 7v14.5H6z" fill="none" stroke="#a0c5e5" stroke-width="1.8" stroke-linejoin="round"/><path d="M13.5 2.5V7H18" fill="none" stroke="#a0c5e5" stroke-width="1.8" stroke-linejoin="round"/><path d="M9 12.5h6M9 16.5h4" fill="none" stroke="#a0c5e5" stroke-width="1.8" stroke-linecap="round"/></g>
   </defs>
 </svg>
 
@@ -294,7 +341,7 @@
       <span class="badge">PySide6</span>
     </div>
     <div class="hero-actions">
-      <a class="hero-cta" href="https://gitcode.com/2603_96523924/School-Timetable-Generator/releases/download/v1.3.2/School-Timetable-Generator-v1.3.2-Windows-x86_64-Setup.exe">
+      <a class="hero-cta" id="btnDownload" href="https://gitcode.com/2603_96523924/School-Timetable-Generator/releases/download/v2.0.0/School-Timetable-Generator-v2.0.0-Windows-x86_64-Setup.exe">
         <svg class="hero-cta-gh" viewBox="0 0 24 24" fill="currentColor"><path d="M0 0h11.377v11.372H0zm12.623 0H24v11.372H12.623zM0 12.623h11.377V24H0zm12.623 0H24V24H12.623z"/></svg>
         下载 Windows 版
       </a>
@@ -308,8 +355,8 @@
       </a>
     </div>
     <div class="hero-stats">
-      <div class="stat"><div class="stat-num">8</div><div class="stat-label">种排课规则</div></div>
-      <div class="stat"><div class="stat-num">4</div><div class="stat-label">份 Excel 导出</div></div>
+      <div class="stat"><div class="stat-num">11</div><div class="stat-label">种排课规则</div></div>
+      <div class="stat"><div class="stat-num">6</div><div class="stat-label">种导出格式</div></div>
       <div class="stat"><div class="stat-num">0</div><div class="stat-label">学习成本</div></div>
     </div>
     <div class="scroll-hint">
@@ -361,6 +408,49 @@
   </div>
 </section>
 
+<!-- ─── 2.0.0 更新亮点 ─── -->
+<section class="whatsnew-sec">
+  <div class="sec-inner">
+    <div class="reveal"><div class="sec-label">What's New</div></div>
+    <div class="reveal"><h2 class="sec-title">2.0.0 更新亮点</h2></div>
+    <div class="reveal"><p class="sec-sub">规则引擎全面重构，新增多种规则类型，导出与生成体验同步升级</p></div>
+    <div class="reveal">
+      <div class="whatsnew-grid">
+        <div class="whatsnew-card">
+          <span class="new-tag">NEW</span>
+          <h4><svg class="ico" viewBox="0 0 24 24"><use href="#ico-grid"/></svg>规则类型扩充至 11 种</h4>
+          <p>新增「每天必排」「保持课时顺序」「老师不能在指定时间排课」等规则，排课约束更细腻，组合出更贴合真实需求的课表。</p>
+        </div>
+        <div class="whatsnew-card">
+          <span class="new-tag">NEW</span>
+          <h4><svg class="ico" viewBox="0 0 24 24"><use href="#ico-target"/></svg>规则支持生效范围</h4>
+          <p>每条规则都能自由指定作用于哪些班级，不同年级、不同学科可采用各自的排课策略，互不干扰。</p>
+        </div>
+        <div class="whatsnew-card">
+          <span class="new-tag">NEW</span>
+          <h4><svg class="ico" viewBox="0 0 24 24"><use href="#ico-file"/></svg>导出 CSES 课表</h4>
+          <p>支持导出 CSES v1 / v2 通用课表交换格式，可直接导入 Class Island、Class Widgets 等班级大屏课表软件。</p>
+        </div>
+        <div class="whatsnew-card">
+          <span class="new-tag">NEW</span>
+          <h4><svg class="ico" viewBox="0 0 24 24"><use href="#ico-bell"/></svg>生成完成系统通知</h4>
+          <p>排课过程无需守候，生成完成后自动推送系统通知，切到别的窗口也不会错过结果。</p>
+        </div>
+        <div class="whatsnew-card">
+          <span class="new-tag">NEW</span>
+          <h4><svg class="ico" viewBox="0 0 24 24"><use href="#ico-alert"/></svg>课程时间冲突检查</h4>
+          <p>配置上下课时间与活动时间时自动检测时间交叉，及时给出警告提示，避免设置互相冲突。</p>
+        </div>
+        <div class="whatsnew-card">
+          <span class="new-tag">NEW</span>
+          <h4><svg class="ico" viewBox="0 0 24 24"><use href="#ico-sliders"/></svg>生成功能更细致</h4>
+          <p>减少教师连堂、平均分配课程、允许跨上下午连堂、限制教师同时最大上课数量等选项一应俱全。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ─── 宣传视频 ─── -->
 <section class="alt">
   <div class="sec-inner">
@@ -389,8 +479,7 @@
         <div class="settings-slide"><img src="设置1.png" alt="设置1" onclick="openLightbox(this.src)"><div class="slide-label">导出 / 导入配置 &middot; 课程信息管理</div></div>
         <div class="settings-slide"><img src="设置2.png" alt="设置2" onclick="openLightbox(this.src)"><div class="slide-label">课程数量 &middot; 年级设置</div></div>
         <div class="settings-slide"><img src="设置3.png" alt="设置3" onclick="openLightbox(this.src)"><div class="slide-label">生成规则 &middot; 生成功能</div></div>
-        <div class="settings-slide"><img src="设置4.png" alt="设置4" onclick="openLightbox(this.src)"><div class="slide-label">活动信息设置</div></div>
-        <div class="settings-slide"><img src="设置5.png" alt="设置5" onclick="openLightbox(this.src)"><div class="slide-label">表格样式设置</div></div>
+        <div class="settings-slide"><img src="设置4.png" alt="设置4" onclick="openLightbox(this.src)"><div class="slide-label">活动信息 &middot; 表格样式</div></div>
       </div>
     </div>
   </div>
@@ -400,16 +489,19 @@
 <section class="alt">
   <div class="sec-inner">
     <div class="reveal"><div class="sec-label">Rule Engine</div></div>
-    <div class="reveal"><h2 class="sec-title">8 种规则，组合出完美课表</h2></div>
-    <div class="reveal"><p class="sec-sub">从「必须排在哪里」到「谁和谁不能同时排」，精准控制每一节课的落位</p></div>
+    <div class="reveal"><h2 class="sec-title">11 种规则，组合出完美课表</h2></div>
+    <div class="reveal"><p class="sec-sub">从「必须排在哪里」到「谁和谁不能同时排」，每条规则还能指定生效班级，精准控制每一节课的落位</p></div>
     <div class="reveal">
       <div class="rules-bento">
         <div class="rule-tile"><svg class="tile-icon" viewBox="0 0 24 24"><use href="#ico-check"/></svg>必须排<span class="tile-label">指定课程固定时段</span></div>
         <div class="rule-tile"><svg class="tile-icon" viewBox="0 0 24 24"><use href="#ico-x"/></svg>不能排<span class="tile-label">锁定不可用的时间</span></div>
         <div class="rule-tile"><svg class="tile-icon" viewBox="0 0 24 24"><use href="#ico-star"/></svg>优先排<span class="tile-label">尽量安排在优先时段</span></div>
+        <div class="rule-tile"><span class="new">新</span><svg class="tile-icon" viewBox="0 0 24 24"><use href="#ico-calendar"/></svg>每天必排<span class="tile-label">每天至少安排一次</span></div>
         <div class="rule-tile"><svg class="tile-icon" viewBox="0 0 24 24"><use href="#ico-grid"/></svg>同时最多排<span class="tile-label">限制并行班级数量</span></div>
         <div class="rule-tile"><svg class="tile-icon" viewBox="0 0 24 24"><use href="#ico-link"/></svg>不能同时排<span class="tile-label">互斥课程错开安排</span></div>
+        <div class="rule-tile"><span class="new">新</span><svg class="tile-icon" viewBox="0 0 24 24"><use href="#ico-chart"/></svg>保持课时顺序<span class="tile-label">各班教学进度一致</span></div>
         <div class="rule-tile"><svg class="tile-icon" viewBox="0 0 24 24"><use href="#ico-user"/></svg>老师不能同时排<span class="tile-label">互斥教师错开</span></div>
+        <div class="rule-tile"><span class="new">新</span><svg class="tile-icon" viewBox="0 0 24 24"><use href="#ico-user"/></svg>老师不能排<span class="tile-label">指定时间锁定教师</span></div>
         <div class="rule-tile"><svg class="tile-icon" viewBox="0 0 24 24"><use href="#ico-attach"/></svg>连堂<span class="tile-label">同一课程连续安排</span></div>
         <div class="rule-tile"><svg class="tile-icon" viewBox="0 0 24 24"><use href="#ico-cycle"/></svg>单双周<span class="tile-label">隔周交替排课</span></div>
       </div>
@@ -445,8 +537,8 @@
 <section class="alt">
   <div class="sec-inner">
     <div class="reveal"><div class="sec-label">Export</div></div>
-    <div class="reveal"><h2 class="sec-title">一键导出，四份 Excel 到位</h2></div>
-    <div class="reveal"><p class="sec-sub">班级课表、教师课表、全校汇总，点一下全部生成（点击图片下载示例）</p></div>
+    <div class="reveal"><h2 class="sec-title">一键导出，多格式到位</h2></div>
+    <div class="reveal"><p class="sec-sub">班级课表、教师课表、全校汇总，还能导出 CSES 通用课表格式（点击图片下载示例）</p></div>
     <div class="reveal">
       <div class="export-grid">
         <div class="export-card">
@@ -464,6 +556,13 @@
         <div class="export-card">
           <a href="导出示例-教师总表（横）.xlsx"><img src="导出-教师总表.png" alt="教师总表"></a>
           <div class="exp-label"><svg class="ico" viewBox="0 0 24 24"><use href="#ico-chart"/></svg>教师总表</div>
+        </div>
+      </div>
+      <div class="cses-banner">
+        <div class="cses-ico"><svg viewBox="0 0 24 24" width="26" height="26"><use href="#ico-file"/></svg></div>
+        <div>
+          <h4>CSES 通用课表导出<span class="new-tag inline">NEW</span></h4>
+          <p>新增 CSES v1 / v2 导出，可直接导入 Class Island、Class Widgets 等班级大屏课表软件，一键同步到教室大屏。</p>
         </div>
       </div>
     </div>
@@ -491,7 +590,7 @@
         <span class="step-badge">One Click</span>
         <h3>方式二 · 安装包即用</h3>
         <ol>
-          <li>前往 <a href="https://github.com/hengdapi/School-Timetable-Generator/releases" target="_blank">Releases 页面</a></li>
+          <li>前往 <a href="https://gitcode.com/2603_96523924/School-Timetable-Generator/releases" target="_blank">Releases 页面</a></li>
           <li>下载 <code>Setup.exe</code> 安装程序</li>
           <li>双击安装，桌面生成快捷方式</li>
           <li>或下载 <code>.zip</code> 解压即用</li>
@@ -562,6 +661,33 @@ function closeLightbox(){
   document.getElementById('lightbox-video').pause()
 }
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeLightbox()})
+
+// ─── 自动检测最新版本并更新下载链接（GitCode 优先，GitHub 兜底）───
+(function(){
+  const btn=document.getElementById('btnDownload')
+  if(!btn)return
+
+  const GC_API='https://api.gitcode.com/api/v5/repos/2603_96523924/School-Timetable-Generator/releases/latest'
+  const GH_API='https://api.github.com/repos/hengdapi/School-Timetable-Generator/releases/latest'
+
+  const parse=t=>(t||'').replace(/^v/i,'').split('.').map(n=>parseInt(n,10)||0)
+  const cmp=(a,b)=>{for(let i=0;i<Math.max(a.length,b.length);i++){const d=(a[i]||0)-(b[i]||0);if(d)return d}return 0}
+  const get=u=>fetch(u,{headers:{Accept:'application/vnd.github+json'}}).then(r=>{if(!r.ok)throw new Error(r.status);return r.json()})
+
+  Promise.allSettled([get(GC_API),get(GH_API)]).then(res=>{
+    let best=null
+    res.forEach(r=>{
+      if(r.status!=='fulfilled'||!r.value||!r.value.tag_name)return
+      const tag=r.value.tag_name
+      const assets=r.value.assets||[]
+      const exe=assets.find(a=>a.name&&/\.exe$/i.test(a.name))
+      const url=exe?exe.browser_download_url:null
+      if(!best||cmp(parse(tag),parse(best.tag))>0)best={tag,url}
+    })
+    if(!best)return
+    btn.href=best.url||('https://gitcode.com/2603_96523924/School-Timetable-Generator/releases/tag/'+best.tag)
+  })
+})()
 </script>
 </body>
 </html>

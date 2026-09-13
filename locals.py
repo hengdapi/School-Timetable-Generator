@@ -74,7 +74,7 @@ def _show_update_dialog(window,response:dict):
         change_log=TextEdit()
         change_log.setMarkdown(response["body"])
         change_log.setReadOnly(True)
-        change_log.setFixedSize(280,round(len(response["body"])/16*25))
+        change_log.setFixedSize(280,min(round(len(response["body"])/16*25),300))
         change_log.setStyleSheet("background-color:transparent; border: none;")
         window.update_msg.addWidget(change_log,alignment=Qt.AlignmentFlag.AlignLeft)
         view_update_button=PushButton()
