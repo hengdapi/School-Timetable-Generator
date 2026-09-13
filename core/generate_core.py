@@ -9,11 +9,6 @@ def check(clas: Class,time: Time,subject: Subject,failed_reasons:set|None=None,c
         else:
             reasons_num=0
         logging.debug(f"检查能否在 {clas} 的 {time} 安排 {subject}")
-        if subject not in clas.left_subjects:
-            if failed_reasons is None:
-                return False
-            failed_reasons.add(f"课程冲突：{clas} 的 {subject} 已经排完")
-            return False
         teacher=clas.get_teacher(subject)
         if not teacher.check(time,subject,failed_reasons,conflict_lessons):
             if failed_reasons is None:
@@ -83,14 +78,30 @@ def check(clas: Class,time: Time,subject: Subject,failed_reasons:set|None=None,c
                 for clas2 in rule.scope:
                     if clas2.left_subjects:
                         continue
-                    if clas2.count_subject(subject,end=time)<clas.count_subject(subject,end=time):
-                        if failed_reasons is None:
-                            return False
-                        failed_reasons.add(f"规则冲突：{clas2} 在 {time} 之前 {subject} 只有{clas2.count_subject(subject,end=time)}个课时，而调课后 {clas} 会有{clas.count_subject(subject,end=time)+1}个课时")
-                    if clas2.count_subject(subject,end=time)>clas.count_subject(subject,end=time)+1:
-                        if failed_reasons is None:
-                            return False
-                        failed_reasons.add(f"规则冲突：{clas2} 在 {time} 之前 {subject} 已经有{clas2.count_subject(subject,end=time)}个课时，而调课后 {clas} 只有{clas.count_subject(subject,end=time)+1}个课时")
+                    time2=Time(1,1)
+                    clas2_cnt=clas_cnt=0
+                    while True:
+                        if clas2.get_lessons(time2) and subject in clas2.get_lessons(time2):
+                            clas2_cnt+=1
+                        if clas.get_lessons(time2) and subject in clas.get_lessons(time2):
+                            clas_cnt+=1
+                        if time2>=time:
+                            clas_cnt+=1
+                        if clas2_cnt<clas_cnt-1:
+                            if failed_reasons is None:
+                                return False
+                            failed_reasons.add(f"规则冲突：{clas2} 在 {time2} 之前 {subject} 只有{clas2_cnt}个课时，而调课后 {clas} 会有{clas_cnt}个课时")
+                            break
+                        if clas2_cnt>clas_cnt+1:
+                            if failed_reasons is None:
+                                return False
+                            failed_reasons.add(f"规则冲突：{clas2} 在 {time2} 之前 {subject} 已经有{clas2_cnt}个课时，而调课后 {clas} 只有{clas_cnt}个课时")
+                            break
+                        if time2>=time:
+                            clas_cnt-=1
+                        time2=time2.next
+                        if time2==Time(1,1):
+                            break
 
         if isinstance(failed_reasons,set) and len(failed_reasons)>reasons_num:
             logging.debug(f"不能排课，原因：\n{"\n".join(failed_reasons)}")
@@ -374,7 +385,7 @@ class GenerateThread(QThread):
                     self.dfs(self.class_lst[self.class_lst.index(clas)+1],Time(1,1))
                 else:
                     self.dfs(clas,next_time)
-            if last:
+            if last and not clas.left_subjects:
                 self.finish=True
         except:
             e=traceback.format_exc()

@@ -4,6 +4,7 @@
 - TimeTableWidget        课程表预览的表格（支持表格内拖拽 + 接收从暂存区拖来的课程）
 - LessonStoragePane      暂存区容器（接收从表格拖来的课程）
 - DraggableLessonCard    暂存区的可拖拽卡片（支持点击/拖拽激活课表高亮）
+- WarningBanner          常驻在页面中的多行警告横幅
 """
 from typing import Optional,Iterable
 
@@ -13,8 +14,85 @@ from PySide6.QtGui import (
     QDrag
 )
 from qfluentwidgets_pro.components.date_time.picker_base import SeparatorWidget
+
 from locals import *
 from style import *
+
+
+# =====================================================================
+# WarningBanner 警告横幅
+# =====================================================================
+class WarningBanner(InfoBar):
+    """
+    常驻在页面布局中的警告横幅。
+
+    与 InfoBar 默认的弹出式用法不同，这里把它当作普通控件插入布局：
+    - duration=-1 表示不自动消失，position=NONE 表示不交给 InfoBarManager 管理
+    - isClosable 默认 False（横幅常驻，由校验结果控制显隐）；
+      需要关闭按钮时传入 isClosable=True，此时与标准 InfoBar 外观一致，
+      点击关闭会发出 closedSignal
+    - 标题与内容均自动换行，可完整显示多行提示信息
+    """
+
+    def __init__(self,parent=None,isClosable=False):
+        super().__init__(
+            InfoBarIcon.WARNING,"","",
+            orient=Qt.Vertical,isClosable=isClosable,
+            duration=-1,position=InfoBarPosition.NONE,parent=parent
+        )
+        self.titleLabel.setWordWrap(True)
+        self.contentLabel.setWordWrap(True)
+        self._polish_layout()
+        self.setVisible(False)
+
+    def _polish_layout(self):
+        """按标准 InfoBar 外观微调排版。
+
+        父类默认布局：图标 ↔ textLayout(标题/正文) ↔ 12px 间隔 ↔ 关闭按钮，
+        textLayout 在水平方向 stretch=0，标题与正文间距 5px。
+        这里做两处调整：
+        1. 标题与正文之间留 12px 空行（父类默认 5 显得紧凑）
+        2. textLayout 设为 stretch=1，横幅被外层拉宽时文字占据剩余宽度
+        若不可关闭，还会把关闭按钮及其间隔移出布局，避免右侧白白占位。
+        """
+        # 标题与正文之间留 12px 间距（父类默认 5 显得紧凑）
+        self.textLayout.setSpacing(12)
+
+        # 不可关闭时移除关闭按钮与其前面的间隔，避免右侧白白占位
+        if not self.isClosable and self.closeButton is not None:
+            self.closeButton.hide()
+            self.closeButton.setFixedSize(0,0)
+            self.hBoxLayout.removeWidget(self.closeButton)
+            for index in reversed(range(self.hBoxLayout.count())):
+                if self.hBoxLayout.itemAt(index).spacerItem() is not None:
+                    self.hBoxLayout.takeAt(index)
+
+        # 当外部布局把横幅拉宽时，文字能占据剩余宽度（不撑满也无所谓，靠左对齐）
+        expanding=QSizePolicy.Expanding
+        self.titleLabel.setSizePolicy(expanding,expanding)
+        self.contentLabel.setSizePolicy(expanding,expanding)
+        text_index=self.hBoxLayout.indexOf(self.textLayout)
+        if text_index>=0:
+            self.hBoxLayout.setStretch(text_index,1)
+
+    def _adjustText(self):
+        # 覆盖父类实现：父类会按固定宽度截断文本，这里保留完整内容并自动换行
+        self.titleLabel.setText(self.title)
+        self.contentLabel.setText(self.content)
+        self.titleLabel.setVisible(bool(self.title))
+        self.contentLabel.setVisible(bool(self.content))
+        self.updateGeometry()
+
+    def show_warning(self,title:str,messages:list[str]|str):
+        """显示警告横幅，messages 为多行文本时逐行显示"""
+        self.title=title
+        self.content="\n".join(messages) if isinstance(messages,(list,tuple)) else messages
+        self._adjustText()
+        self.setVisible(True)
+
+    def hide_warning(self):
+        """隐藏警告横幅"""
+        self.setVisible(False)
 
 
 # =====================================================================
