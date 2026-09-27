@@ -62,7 +62,7 @@ def _subject_weeks(clas: Class, time: Time, subject: Subject) -> tuple[bool, boo
     对于单双周课程（half_subjects），通过教师 timetable 中 sin/dou 周的记录判断；
     普通课程两周都有课。
     """
-    if subject in half_subjects:
+    if subject in clas.half_subjects:
         teacher = _get_class_teacher(clas, subject)
         if teacher is None:
             return False, False
@@ -125,6 +125,52 @@ def yaml_dump(data, indent: int = 0) -> str:
     return pad + _scalar(data)
 
 
+def _activity_time_range(activity: str) -> tuple[str, str]:
+    """获取某活动的起止时间字符串（HH:MM:SS）"""
+    start_h, start_m = cfg.activity_info.value[activity][0]
+    end_h, end_m = cfg.activity_info.value[activity][1]
+    return f"{start_h:02d}:{start_m:02d}:00", f"{end_h:02d}:{end_m:02d}:00"
+
+
+def _build_activity_classes() -> list[dict]:
+    """
+    构建每天固定活动的条目列表（按开始时间排序）。
+
+    活动在设置中配置（活动名 -> [[开始时分], [结束时分]]），每天都会进行，
+    因此在每个日课表中都作为一项 class 出现在对应时间。
+    """
+    classes = []
+    for activity in cfg.activity_info.value:
+        start_time, end_time = _activity_time_range(activity)
+        classes.append({"subject": activity,
+                        "start_time": start_time,
+                        "end_time": end_time})
+    classes.sort(key=lambda item: item["start_time"])
+    return classes
+
+
+def _merge_activities(classes: list[dict]) -> list[dict]:
+    """将每天固定活动合并进课程条目列表，按开始时间排序（同时开始时活动排在前）"""
+    activity_classes = _build_activity_classes()
+    if not activity_classes:
+        return classes
+    # 活动置于列表前方，稳定排序保证同一开始时间时活动排在课程之前
+    merged = activity_classes + classes
+    merged.sort(key=lambda item: item["start_time"])
+    return merged
+
+
+def _to_classes(items: list[tuple[int, Subject]]) -> list[dict]:
+    """将 (节次, 科目) 列表转换为 CSES class 条目列表（含每天固定活动，按时间排序）"""
+    classes = [
+        {"subject": clean_subject_name(subject.name),
+         "start_time": lesson_time_range(lesson)[0],
+         "end_time": lesson_time_range(lesson)[1]}
+        for lesson, subject in items
+    ]
+    return _merge_activities(classes)
+
+
 def _collect_used_subjects(clas: Class) -> list[Subject]:
     """收集班级课表中实际使用的科目（按首次出现顺序去重）"""
     used: list[Subject] = []
@@ -140,6 +186,7 @@ def _collect_used_subjects(clas: Class) -> list[Subject]:
 
 def _build_subjects(clas: Class) -> list[dict]:
     subjects = []
+    used_names: set[str] = set()
     for subject in _collect_used_subjects(clas):
         name = clean_subject_name(subject.name)
         simplified = name
@@ -151,6 +198,12 @@ def _build_subjects(clas: Class) -> list[dict]:
         if teacher:
             entry["teacher"] = teacher.name
         subjects.append(entry)
+        used_names.add(name)
+    # 每天固定活动同样登记为科目，供日课表中的活动条目引用（活动无任课教师）
+    for activity in cfg.activity_info.value:
+        if activity in used_names:
+            continue
+        subjects.append({"name": activity, "simplified_name": activity[0]})
     return subjects
 
 
@@ -168,28 +221,20 @@ def _build_schedules(clas: Class) -> list[dict]:
                 if in_dou:
                     dou_classes.append((lesson, subject))
 
-        def to_classes(items: list[tuple[int, Subject]]) -> list[dict]:
-            return [
-                {"subject": clean_subject_name(subject.name),
-                 "start_time": lesson_time_range(lesson)[0],
-                 "end_time": lesson_time_range(lesson)[1]}
-                for lesson, subject in items
-            ]
-
         sin_key = [(lesson, subject.name) for lesson, subject in sin_classes]
         dou_key = [(lesson, subject.name) for lesson, subject in dou_classes]
         if sin_key == dou_key:
             # 单双周一致（无非单双周课程），一个日课表覆盖两周对应天
             schedules.append({"name": DAY_NAMES[day],
                               "enable_day": [day, day + WORK_DAYS_PER_WEEK],
-                              "classes": to_classes(sin_classes)})
+                              "classes": _to_classes(sin_classes)})
         else:
             schedules.append({"name": f"{DAY_NAMES[day]}-单周",
                               "enable_day": [day],
-                              "classes": to_classes(sin_classes)})
+                              "classes": _to_classes(sin_classes)})
             schedules.append({"name": f"{DAY_NAMES[day]}-双周",
                               "enable_day": [day + WORK_DAYS_PER_WEEK],
-                              "classes": to_classes(dou_classes)})
+                              "classes": _to_classes(dou_classes)})
     return schedules
 
 
@@ -214,14 +259,6 @@ def _build_schedules_v1(clas: Class) -> list[dict]:
                 if in_dou:
                     dou_classes.append((lesson, subject))
 
-        def to_classes(items: list[tuple[int, Subject]]) -> list[dict]:
-            return [
-                {"subject": clean_subject_name(subject.name),
-                 "start_time": lesson_time_range(lesson)[0],
-                 "end_time": lesson_time_range(lesson)[1]}
-                for lesson, subject in items
-            ]
-
         sin_key = [(lesson, subject.name) for lesson, subject in sin_classes]
         dou_key = [(lesson, subject.name) for lesson, subject in dou_classes]
         if sin_key == dou_key:
@@ -229,17 +266,17 @@ def _build_schedules_v1(clas: Class) -> list[dict]:
             schedules.append({"name": DAY_NAMES[day],
                               "enable_day": day,
                               "weeks": "all",
-                              "classes": to_classes(sin_classes)})
+                              "classes": _to_classes(sin_classes)})
         else:
             # 单双周不同，拆成 odd/even 两个日课表（enable_day 相同）
             schedules.append({"name": f"{DAY_NAMES[day]}-单周",
                               "enable_day": day,
                               "weeks": "odd",
-                              "classes": to_classes(sin_classes)})
+                              "classes": _to_classes(sin_classes)})
             schedules.append({"name": f"{DAY_NAMES[day]}-双周",
                               "enable_day": day,
                               "weeks": "even",
-                              "classes": to_classes(dou_classes)})
+                              "classes": _to_classes(dou_classes)})
     return schedules
 
 

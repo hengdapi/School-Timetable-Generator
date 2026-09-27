@@ -133,7 +133,7 @@ if sys.platform == "win32":
         "--include-data-file=images/issue_help.png=images/issue_help.png",
         "--include-data-file=images/issue_help2.png=images/issue_help2.png",
         "--include-data-file=images/issue_help3.png=images/issue_help3.png",
-        "--include-data-file=images/issue_help3.png=images/cses.png",
+        "--include-data-file=images/cses.png=images/cses.png",
         "--include-data-file=LICENSE=LICENSE",
         "--include-data-file=logo.ico=logo.ico",
         "--include-data-file=template.xlsx=template.xlsx",

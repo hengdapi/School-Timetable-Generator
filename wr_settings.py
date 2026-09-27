@@ -12,6 +12,8 @@ class Settings(QConfig):
     text_size=ConfigItem("table_style","text_size",9,restart=True)
     school_name=ConfigItem("table_style","school_name","学校名称",restart=True)
     lessons_time=ConfigItem("table_style","lessons_time",{},restart=True)
+    default_duration=ConfigItem("table_style","default_duration",45,restart=True)
+    timeline_range=ConfigItem("table_style","timeline_range",[7,18],restart=True)
 
     subjects_info=ConfigItem("lessons_info","subjects_info",{},restart=True)
     lessons_info=ConfigItem("lessons_info","lessons_info",{},restart=True)

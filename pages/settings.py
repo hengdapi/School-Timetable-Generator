@@ -1,8 +1,8 @@
 # coding=utf-8
 import shutil
 
-from PySide6.QtCore import QTime
 from core.rules import *
+from pages.timeline import TimelineEditor
 from pages.ui_widgets import *
 
 class RuleMessageBox(MessageBoxBase):
@@ -245,7 +245,6 @@ class Settings(QFrame):
             for lesson in range(len(cfg.lessons_time.value)+1,cfg.day_class_num+1):
                 cfg.lessons_time.value[str(lesson)]=[[0,0],[0,0]]
         save_settings()
-        self.show_lesson_time_group()
         # 新增课次的起止时间默认为空，需要重新校验并提示
         self.refresh_time_warnings()
 
@@ -420,9 +419,22 @@ class Settings(QFrame):
         # 重新应用规则，同步 lesson_info.rules 及各班级的规则数据
         apply_rules()
 
-    def lesson_time_changed(self,lesson:int,end:bool,time:QTime):
-        cfg.lessons_time.value[str(lesson)][end]=[time.hour(),time.minute()]
-        save_settings()
+    def open_timeline_editor(self):
+        """打开时间段活动编辑窗口（独立窗口）"""
+        if self.timeline_window is None:
+            self.timeline_window=TimelineEditor(self.window())
+            self.timeline_window.destroyed.connect(self.on_timeline_window_closed)
+            # 时间轴里改完时间后同步刷新本页的时间冲突提示
+            self.timeline_window.dataChanged.connect(self.on_timeline_data_changed)
+        self.timeline_window.show()
+        self.timeline_window.raise_()
+        self.timeline_window.activateWindow()
+
+    def on_timeline_window_closed(self):
+        self.timeline_window=None
+
+    def on_timeline_data_changed(self):
+        """时间段编辑窗口里的时间被修改，同步刷新本页的时间冲突提示"""
         self.refresh_time_warnings()
 
     @staticmethod
@@ -446,7 +458,8 @@ class Settings(QFrame):
         - 各活动的时间不能互相交叉
         - 活动时间不能与任何课次的时间交叉
 
-        返回 (课程警告,活动警告)，分别对应显示在“课程起止时间”与“活动信息”位置。
+        返回 (课程警告,活动警告)；课程与活动的时间都在“时间段编辑”窗口里修改，
+        这里只负责把冲突提示显示在设置页的“课程起止时间”卡片下方。
         """
         lesson_messages=[]
         activity_messages=[]
@@ -494,26 +507,25 @@ class Settings(QFrame):
         """
         刷新课程与活动时间的警告横幅。
 
-        校验不通过时只在对应位置弹出 warning 横幅提示，不阻止用户保存配置；
+        校验不通过时只弹出 warning 横幅提示，不阻止用户保存配置；
         全部合法时隐藏横幅，并自动按时间顺序排列活动。
         """
         # 页面尚未构建完对应区域时直接跳过
-        if self.lesson_banner is None or self.activity_banner is None:
+        if self.time_banner is None:
             return
         lesson_messages,activity_messages=self.check_time_valid()
-        if lesson_messages:
-            self.lesson_banner.show_warning("课程时间设置有冲突",lesson_messages)
+        messages=[]
+        for message in lesson_messages+activity_messages:
+            if message not in messages:
+                messages.append(message)
+        if messages:
+            self.time_banner.show_warning("时间设置有冲突",messages)
         else:
-            self.lesson_banner.hide_warning()
-        if activity_messages:
-            self.activity_banner.show_warning("活动时间设置有冲突",activity_messages)
-        else:
-            self.activity_banner.hide_warning()
-        if not lesson_messages and not activity_messages:
+            self.time_banner.hide_warning()
             self.sort_activities()
 
     def sort_activities(self):
-        """时间全部合法时，按开始时间（相同则按结束时间）为活动排序并刷新表格"""
+        """时间全部合法时，按开始时间（相同则按结束时间）为活动排序"""
         activities=sorted(
             cfg.activity_info.value.items(),
             key=lambda item:(item[1][0][0]*60+item[1][0][1],item[1][1][0]*60+item[1][1][1])
@@ -522,87 +534,7 @@ class Settings(QFrame):
             return
         cfg.activity_info.value=dict(activities)
         save_settings()
-        self.show_activities()
         logging.info("活动已按时间顺序重新排序")
-
-    def show_lesson_time_group(self):
-        group_idx=self.layout.indexOf(self.lesson_length_group)
-        self.lesson_length_group.hide()
-        self.lesson_length_group.deleteLater()
-        status=self.lesson_length_group.isExpand
-        self.lesson_length_group=ExpandGroupSettingCard(FluentIcon.STOP_WATCH,"课程起止时间","显示在对应课时下方")
-        for lesson in range(1,cfg.day_class_num+1):
-            curr_time=Time(1,lesson)
-            lesson_length_card=SettingCard("",curr_time.to_str(False,True))
-            start_time=TimePicker()
-            start_time.setTime(QTime(cfg.lessons_time.value[str(lesson)][0][0],cfg.lessons_time.value[str(lesson)][0][1]))
-            start_time.timeChanged.connect(lambda time,l=lesson: self.lesson_time_changed(l,False,time))
-            lesson_length_card.hBoxLayout.addWidget(start_time)
-            lesson_length_card.hBoxLayout.addWidget(QLabel("  ~  "))
-            end_time=TimePicker()
-            end_time.setTime(QTime(cfg.lessons_time.value[str(lesson)][1][0],cfg.lessons_time.value[str(lesson)][1][1]))
-            end_time.timeChanged.connect(lambda time,l=lesson: self.lesson_time_changed(l,True,time))
-            lesson_length_card.hBoxLayout.addWidget(end_time)
-            lesson_length_card.hBoxLayout.addSpacing(20)
-            self.lesson_length_group.addGroupWidget(lesson_length_card)
-        self.layout.insertWidget(group_idx,self.lesson_length_group)
-        self.lesson_length_group.setExpand(status)
-
-    def show_activities(self):
-        self.save_activity_lock=True
-        self.activity_table.setRowCount(len(cfg.activity_info.value))
-        self.activity_table.setFixedHeight(min(300,len(cfg.activity_info.value)*50+50))
-        r=0
-        for activity,(start_time,end_time) in cfg.activity_info.value.items():
-            item=QTableWidgetItem(activity)
-            item.setTextAlignment(Qt.AlignCenter)
-            self.activity_table.setItem(r,0,item)
-            start_timePicker=TimePicker()
-            start_timePicker.setTime(QTime(start_time[0],start_time[1]))
-            start_timePicker.timeChanged.connect(self.save_activity)
-            self.activity_table.setCellWidget(r,1,start_timePicker)
-            end_timePicker=TimePicker()
-            end_timePicker.setTime(QTime(end_time[0],end_time[1]))
-            end_timePicker.timeChanged.connect(self.save_activity)
-            self.activity_table.setCellWidget(r,2,end_timePicker)
-            r+=1
-        self.del_activity_button.setEnabled(bool(self.activity_table.selectedItems()))
-        self.save_activity_lock=False
-
-    def add_activity(self):
-        cfg.activity_info.value[f"新活动{len(cfg.activity_info.value)+1}"]=[[0,0],[0,0]]
-        save_settings()
-        self.show_activities()
-        self.refresh_time_warnings()
-
-    def del_activity(self):
-        cfg.activity_info.value.pop(self.activity_table.item(self.activity_table.currentRow(),0).text())
-        save_settings()
-        self.show_activities()
-        self.refresh_time_warnings()
-
-    def save_activity(self):
-        if self.save_activity_lock:
-            return
-        # 直接操作时间选择器时可能没有任何选中行，此处需要容错
-        current_row=self.activity_table.currentRow()
-        current_item=self.activity_table.item(current_row,0)
-        activity_info={}
-        if current_item is not None:
-            names=[self.activity_table.item(r,0).text() for r in range(self.activity_table.rowCount())]
-            if names.count(current_item.text())>1:
-                Toast.error("请勿设置名称重复的活动",f"名称“{current_item.text()}”重复",parent=self,duration=2000)
-                self.save_activity_lock=True
-                current_item.setText(list(cfg.activity_info.value.keys())[current_row])
-                self.save_activity_lock=False
-        for r in range(self.activity_table.rowCount()):
-            activity_info[self.activity_table.item(r,0).text()]=[
-                [self.activity_table.cellWidget(r,1).time.hour(),self.activity_table.cellWidget(r,1).time.minute()],
-                [self.activity_table.cellWidget(r,2).time.hour(),self.activity_table.cellWidget(r,2).time.minute()]
-            ]
-        cfg.activity_info.value=activity_info
-        save_settings()
-        self.refresh_time_warnings()
 
     def refresh_grade_button(self):
         idx=list(cfg.grades_info.value.keys()).index(self.grade_table.item(self.grade_table.currentRow(),0).text())
@@ -699,9 +631,10 @@ class Settings(QFrame):
             super().__init__(parent=parent)
             logging.info("开始加载设置页面")
             self.setObjectName("Settings")
-            # 时间合法性警告横幅，在构建对应区域时创建
-            self.lesson_banner=None
-            self.activity_banner=None
+            # 课程/活动时间合法性警告横幅，在构建对应区域时创建
+            self.time_banner=None
+            # 时间段编辑独立窗口（避免被垃圾回收，关闭后自动置空）
+            self.timeline_window=None
             main_layout=QVBoxLayout(self)
             main_layout.setContentsMargins(20,20,0,0)
 
@@ -763,13 +696,14 @@ class Settings(QFrame):
             self.afternoon_class_num.valueChanged.connect(lambda :self.on_class_num_changed("afternoon"))
             add_widget(self.afternoon_class_num,self.layout,0)
 
-            self.lesson_length_group=ExpandGroupSettingCard(FluentIcon.DATE_TIME,"课程起止时间（显示在课时下方）")
-            add_widget(self.lesson_length_group,self.layout,0)
-            self.on_class_num_changed()
+            self.lesson_time_card=PushSettingCard("设置",FluentIcon.DATE_TIME,"活动起止时间","设置每天各节课和其他活动的起止时间")
+            self.lesson_time_card.clicked.connect(self.open_timeline_editor)
+            add_widget(self.lesson_time_card,self.layout,0)
 
-            # 课程时间设置的警告横幅（紧跟在课程起止时间分组下方）
-            self.lesson_banner=WarningBanner(self)
-            self.layout.insertWidget(self.layout.indexOf(self.lesson_length_group)+1,self.lesson_banner)
+            # 课程与活动时间冲突的警告横幅（显示在“课程起止时间”卡片下方）
+            self.time_banner=WarningBanner(self)
+            add_widget(self.time_banner,self.layout)
+            self.on_class_num_changed()
 
             subheader("年级信息",self,self.layout)
 
@@ -866,40 +800,6 @@ class Settings(QFrame):
             self.max_tries_card=RangeSettingCard(cfg.max_tries,FluentIcon.CANCEL,"最大尝试次数","设置自动生成时同一时间最多尝试生成多少次，如果在尝试次数内无法生成出完全满足规则的课表，则会跳过该时间，并把剩余课程放在暂存区中")
             add_widget(self.max_tries_card,self.layout)
             self.teachers_max_num_group.clicked.connect(self.set_teachers_max_num)
-
-            add_widget(SeparatorWidget(orient=Qt.Horizontal),self.layout)
-
-            biggersubheader("活动信息",self,self.layout)
-
-            self.activity_operation_layout=QHBoxLayout()
-            self.layout.addLayout(self.activity_operation_layout)
-
-            self.add_activity_button=button("添加活动",self,self.activity_operation_layout,0)
-            self.add_activity_button.setIcon(FluentIcon.ADD)
-            self.add_activity_button.clicked.connect(self.add_activity)
-            self.add_activity_button.setFixedWidth(200)
-            self.del_activity_button=button("删除活动",self,self.activity_operation_layout)
-            self.del_activity_button.setIcon(FluentIcon.DELETE)
-            self.del_activity_button.setFixedWidth(200)
-            self.del_activity_button.setEnabled(False)
-            self.del_activity_button.clicked.connect(self.del_activity)
-            self.activity_operation_layout.addStretch(1)
-
-            self.save_activity_lock=False
-            self.activity_table=LineTableWidget()
-            self.activity_table.setColumnCount(3)
-            self.activity_table.setHorizontalHeaderLabels(["活动名称","开始时间","结束时间"])
-            for c in range(3):
-                self.activity_table.setColumnWidth(c,300)
-            self.activity_table.verticalHeader().hide()
-            self.show_activities()
-            self.activity_table.cellChanged.connect(self.save_activity)
-            self.activity_table.clicked.connect(lambda :self.del_activity_button.setEnabled(True))
-            add_widget(self.activity_table,self.layout)
-
-            # 活动时间设置的警告横幅（显示在活动表格下方）
-            self.activity_banner=WarningBanner(self)
-            self.layout.insertWidget(self.layout.indexOf(self.activity_table)+1,self.activity_banner)
 
             add_widget(SeparatorWidget(orient=Qt.Horizontal),self.layout)
 

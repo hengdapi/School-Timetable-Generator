@@ -1,17 +1,28 @@
 import os.path
 
 from PySide6 import QtGui
-from PySide6.QtCore import QByteArray,QSize,QRectF
+from PySide6.QtCore import QByteArray,QRectF
+from PySide6.QtGui import QKeySequence,QShortcut
 
 from core.generate_core import *
-from pages.ui_widgets import *
 from core.save_core import SaveThread
 from core.system_notification import send_system_notification
+from core.timetable_core import *
+from pages.dialogs import *
 
 # 读取配置文件
 cfg=load_settings()
 colors={"Light":{"yes":QColor(150,255,150),"no":QColor(255,150,150),"curr":QColor(255,255,200),"same":QColor(170,170,255)},
         "Dark":{"yes":QColor(100,200,100),"no":QColor(200,100,100),"curr":QColor(170,170,100),"same":QColor(170,170,255)}}[darkdetect.theme() if darkdetect.theme() else "Light"]
+
+class HistoryIcon(FluentIconBase,Enum):
+    """撤销/重做图标（FluentIcon 未内置，直接使用组件自带的 svg 资源）"""
+
+    UNDO="ArrowUndo"
+    REDO="ArrowRedo"
+
+    def path(self,theme=Theme.AUTO):
+        return f":/qfluentwidgets/images/icons/{self.value}_{getIconColor(theme)}.svg"
 
 class ColorSwatch(QWidget):
     """抗锯齿圆角色块（解决 QSS 圆角在高分屏上的锯齿问题）"""
@@ -53,128 +64,6 @@ def make_legend(parent=None) -> QWidget:
         layout.addWidget(item)
     return legend
 
-class SaveTimetablePlan(MessageBoxBase):
-    def __init__(self, plan_time, parent=None):
-        super().__init__(parent=parent)
-        subheader("保存课程表方案",self,self.viewLayout)
-        write("方案名称（若选择已有方案名称则覆盖该方案）：",self,self.viewLayout,0)
-        self.name_input=EditableComboBox()
-        self.name_input.addItems(cfg.timetable_plans.value.keys())
-        self.name_input.setCompleter(QCompleter(cfg.timetable_plans.value.keys(),self.name_input))
-        self.name_input.setText(f"{plan_time} 保存的方案")
-        self.name_input.textChanged.connect(self.on_input_name)
-        add_widget(self.name_input,self.viewLayout)
-        write("方案描述：",self,self.viewLayout,0)
-        self.desc_input=LineEdit()
-        add_widget(self.desc_input,self.viewLayout)
-        self.yesButton.setText("保存方案")
-        self.yesButton.setIcon(FluentIcon.SAVE)
-        self.cancelButton.setText("取消")
-        
-    def validate(self) -> bool:
-        if not self.name_input.text():
-            Toast.error("请输入方案名称","",duration=-1,parent=self)
-            return False
-        return True
-
-    def on_input_name(self):
-        if self.name_input.text() in cfg.timetable_plans.value:
-            self.desc_input.setText(cfg.timetable_plans.value[self.name_input.text()]["desc"])
-            self.yesButton.setText("覆盖方案")
-        else:
-            self.yesButton.setText("保存方案")
-
-class LoadTimetablePlan(MessageBoxBase):
-    def __init__(self,parent=None):
-        super().__init__(parent=parent)
-        subheader("加载课程表方案",self,self.viewLayout)
-        self.plan_list=RoundListWidget(self)
-        # 通过自定义 Delegate 设置项高度（不破坏原有 QSS）
-        self.delegate=RoundListItemDelegate(self.plan_list)
-        self.delegate.sizeHint=lambda option,idx:QSize(option.rect.width(),72)
-        self.plan_list.setItemDelegate(self.delegate)
-        for plan_name,plan_info in cfg.timetable_plans.value.items():
-            self.plan_list.addItem(f"{plan_name}\n保存时间：{plan_info['time']}\n描述：{plan_info['desc']}")
-        add_widget(self.plan_list,self.viewLayout,0)
-        self.yesButton.setText("加载方案")
-        self.yesButton.setIcon(FluentIcon.HISTORY)
-
-    def validate(self) -> bool:
-        if not self.plan_list.selectedItems():
-            Toast.error("请选择要加载的方案","",duration=-1,parent=self)
-            return False
-        plan_name=self.plan_list.selectedItems()[0].text().split("\n")[0]
-        if not os.path.exists(os.path.join(appdata,cfg.timetable_plans.value[plan_name]["filename"])):
-            Toast.error("方案文件已丢失，无法加载","",duration=-1,parent=self)
-            return False
-        return True
-
-class DelTimetablePlan(MessageBoxBase):
-    def __init__(self,parent=None):
-        super().__init__(parent=parent)
-        subheader("删除课程表方案",self,self.viewLayout)
-        write("在下方列表拖动或按住ctrl可多选：",self,self.viewLayout,0)
-        self.plan_list=RoundListWidget(self)
-        # 通过自定义 Delegate 设置项高度（不破坏原有 QSS）
-        self.delegate=RoundListItemDelegate(self.plan_list)
-        self.delegate.sizeHint=lambda option,idx:QSize(option.rect.width(),72)
-        self.plan_list.setItemDelegate(self.delegate)
-        self.plan_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        for plan_name,plan_info in cfg.timetable_plans.value.items():
-            self.plan_list.addItem(f"{plan_name}\n保存时间：{plan_info['time']}\n描述：{plan_info['desc']}")
-        add_widget(self.plan_list,self.viewLayout,0)
-        self.yesButton.setText("删除方案")
-        self.yesButton.setIcon(FluentIcon.DELETE)
-
-    def validate(self) -> bool:
-        if not self.plan_list.selectedItems():
-            Toast.error("请选择要删除的方案","",duration=-1,parent=self)
-            return False
-        return True
-
-class ForceExchangeMsgbox(MessageBoxBase):
-    def __init__(self,failed_reasons:set[str],conflict_lessons:set[tuple[Class,Time]], parent=None):
-        super().__init__(parent=parent)
-        subheader("强制调课",self,self.viewLayout)
-        write("由于以下原因，您的调课操作无法完成：",self,self.viewLayout,0)
-        self.reason_list=RoundListWidget()
-        self.reason_list.setFixedSize(700,min(len(failed_reasons)*50,230))
-        self.reason_list.addItems(failed_reasons)
-        add_widget(self.reason_list,self.viewLayout,0)
-        write("是否要强制调课？",self,self.viewLayout,0)
-        if conflict_lessons:
-            write("强制调课后，以下导致冲突的课程将会自动放在对应班级的暂存区中：",self,self.viewLayout,0)
-            self.conflict_list=RoundListWidget()
-            self.conflict_list.setFixedSize(700,min(len(conflict_lessons)*50,230))
-            for lesson in conflict_lessons:
-                self.conflict_list.addItem(f"{lesson[0]} {lesson[1]} {lesson[0].get_lessons(lesson[1])[0 if lesson[1].all or lesson[1].sin else 1]}")
-            add_widget(self.conflict_list,self.viewLayout,0)
-        write("若原因中包含规则冲突，强制调课后将无视导致冲突的规则",self,self.viewLayout,0)
-        self.yesButton.setText("强制调课")
-        self.yesButton.setIcon(FluentIcon.SYNC)
-
-class SelectCustomClassesMsgbox(MessageBoxBase):
-    def __init__(self,mode:str,parent=None):
-        super().__init__(parent=parent)
-        if mode=="generate":
-            subheader("自定义生成部分课表",self,self.viewLayout)
-            write("请选择为哪些班级生成课表：",self,self.viewLayout,0)
-            self.yesButton.setText("生成课表")
-            self.yesButton.setIcon(FluentIcon.BRUSH)
-        else:
-            subheader("自定义清空部分课表",self,self.viewLayout)
-            write("请选择清空哪些班级的课表：",self,self.viewLayout,0)
-            self.yesButton.setText("清空课表")
-            self.yesButton.setIcon(FluentIcon.DELETE)
-        self.class_combo=ClassMultiSelectionCombobox()
-        add_widget(self.class_combo,self.viewLayout)
-
-    def validate(self) -> bool:
-        if not self.class_combo.checkedTexts():
-            Toast.error("请选择班级","",duration=-1,parent=self)
-            return False
-        return True
-
 class Generate(QFrame):
     def __init__(self,parent=None):
         super().__init__(parent=parent)
@@ -183,6 +72,8 @@ class Generate(QFrame):
         self.check_result:dict[Time,bool]={}
         self.failed_reasons:dict[Time,set]={}
         self.conflict_lessons:dict[Time,set[tuple[Class,Time]]]={}
+        self.teacher_pane_teachers:dict[QTableWidget,Teacher]={}  # 右侧教师课程表预览对应的老师
+        self.history=TimetableHistory()  # 课表修改历史（撤销/重做）
 
         # === 创建内容容器 ===
         view=QWidget()
@@ -242,8 +133,30 @@ class Generate(QFrame):
         self.save_menu.addAction(Action(QtGui.QIcon("images/cses.png"),"导出CSES课表v2",triggered=lambda :self.save_timetable("cses"),toolTip="当前部分软件尚未支持，如课表软件提示导入失败请尝试v1版本导入"))
         self.save_button.setMenu(self.save_menu)
         add_widget(self.save_button,self.operation_layout)
-        add_widget(SeparatorWidget(orient=Qt.Vertical),self.operation_layout)
 
+        # 撤销 / 重做
+        self.undo_button=TransparentToolButton()
+        self.undo_button.setIcon(FluentIcon.CANCEL)
+        self.undo_button.setToolTip("撤销")
+        self.undo_button.clicked.connect(self.undo)
+        add_widget(self.undo_button,self.operation_layout)
+
+        self.redo_button=TransparentToolButton()
+        self.redo_button.setIcon(HistoryIcon.REDO)
+        self.redo_button.setToolTip("重做")
+        self.redo_button.clicked.connect(self.redo)
+        add_widget(self.redo_button,self.operation_layout)
+
+        # 快捷键：Ctrl+Z 撤销，Ctrl+Y / Ctrl+Shift+Z 重做
+        for shortcut in (QShortcut(QKeySequence(QKeySequence.Undo),self),):
+            shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(self.undo)
+        for shortcut in (QShortcut(QKeySequence(QKeySequence.Redo),self),QShortcut(QKeySequence("Ctrl+Shift+Z"),self)):
+            shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(self.redo)
+        self.refresh_history_actions()
+
+        add_widget(SeparatorWidget(orient=Qt.Vertical),self.operation_layout)
         self.manage_plan_button=DropDownPushButton()
         self.manage_plan_button.setText("管理课程表方案")
         self.manage_plan_button.setToolTip("管理已保存的课程表方案")
@@ -300,13 +213,15 @@ class Generate(QFrame):
         self.timetable_header_layout.addWidget(self.timetable_legend)
         self.timetable_preview=TimeTableWidget(self)
         self.timetable_preview.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.timetable_preview.clicked.connect(self.on_timetable_preview_clicked)
+        self.timetable_preview.currentItemChanged.connect(self.on_timetable_preview_clicked)
+        self.timetable_preview.reclicked.connect(self.on_timetable_preview_reclicked)
         self.timetable_preview.dropdown.connect(self.exchange_lessons)
         self.timetable_preview.dragmove.connect(self.on_drag_move)
         self.timetable_preview.stored_lesson_dropped.connect(self.add_stored_lesson_to_timetable)
         self.timetable_preview.stored_lesson_dragmove.connect(self.on_stored_lesson_dragmove)
         self.timetable_preview.table_dropped_on_empty.connect(self.move_lesson_to_empty)
         self.timetable_preview.lesson_storage.connect(self.store_lesson)
+        self.timetable_preview.itemDoubleClicked.connect(self.jump_to_class_from_cell)
         add_widget(self.timetable_preview,self.timetable_layout,0)
         self.store_lesson_subheader=subheader("课程暂存区",self,self.timetable_layout,10)
         self.stored_lesson_cards:list[DraggableLessonCard]=[]
@@ -327,6 +242,7 @@ class Generate(QFrame):
         self.teacher_timetable_preview.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.teacher_timetable_preview.verticalHeader().setVisible(False)
         self.teacher_timetable_preview.setStyleSheet("QTableWidget { border: none; }")
+        self.teacher_timetable_preview.itemDoubleClicked.connect(self.jump_to_class_from_cell)
         add_widget(self.teacher_timetable_preview,self.teacher_timetable_layout,10)
 
         self.teacher2_timetable_subheader=subheader("教师2课程表",self,self.teacher_timetable_layout,0)
@@ -335,6 +251,7 @@ class Generate(QFrame):
         self.teacher2_timetable_preview.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.teacher2_timetable_preview.verticalHeader().setVisible(False)
         self.teacher2_timetable_preview.setStyleSheet("QTableWidget { border: none; }")
+        self.teacher2_timetable_preview.itemDoubleClicked.connect(self.jump_to_class_from_cell)
         add_widget(self.teacher2_timetable_preview,self.teacher_timetable_layout,0)
 
         self.preview_splitter.addWidget(self.teacher_timetable_pane)
@@ -412,17 +329,22 @@ class Generate(QFrame):
         self.object_tree.addTopLevelItems([self.class_total_item,self.teacher_total_item])
         self.refresh_object_tree()
 
-    def refresh_object_tree(self):
-        self.total_left_subjects=0
+    def refresh_object_tree(self,class_names=None):
+        """刷新对象树上的剩余课程数徽标；class_names 不为 None 时只重建这些班级的徽标"""
         badge_font=InfoBadge.info(1).font()
+        class_names=None if class_names is None else set(class_names)
+        self.total_left_subjects=sum(len(clas.left_subjects) for clas in lesson_info.class_lst)
         for grade_item,class_items in self.class_items.items():
-            grade_left_subjects=0
             grade_name=grade_item.data(0,Qt.UserRole)
+            if class_names is not None and not any(class_item.data(0,Qt.UserRole) in class_names for class_item in class_items):
+                continue  # 该年段没有变化的班级，整段都不用重建
+            grade_left_subjects=0
             for class_item in class_items:
                 class_name=class_item.data(0,Qt.UserRole)
                 clas=lesson_info.classes[class_name]
                 grade_left_subjects+=len(clas.left_subjects)
-                self.total_left_subjects+=len(clas.left_subjects)
+                if class_names is not None and class_name not in class_names:
+                    continue
                 self.object_tree.setItemWidget(class_item,0,widget_with_badge(class_name,len(clas.left_subjects),self.object_tree.font(),badge_font))
             self.object_tree.setItemWidget(grade_item,0,widget_with_badge(grade_name,grade_left_subjects,self.object_tree.font(),badge_font))
         self.object_tree.setItemWidget(self.classes_top_item,0,widget_with_badge("班级课表",self.total_left_subjects,self.object_tree.font(),badge_font))
@@ -515,6 +437,97 @@ class Generate(QFrame):
         save_settings()
         self.set_timetables_size()
 
+    # ==================== 撤销 / 重做 ====================
+    def history_extra(self)->dict:
+        """随历史快照一起保存的界面状态"""
+        return {"saved":lesson_info.saved,"plan_text":self.curr_plan.text()}
+
+    def push_history(self,snapshot:tuple|None=None):
+        """记录一步可撤销的操作，应在修改课表之前调用"""
+        if snapshot is None:
+            snapshot=self.history.snapshot(self.history_extra())
+        self.history.push(snapshot)
+        self.refresh_history_actions()
+
+    def apply_history_extra(self,snapshot:tuple):
+        """恢复随快照保存的界面状态（课表数据由 TimetableHistory 恢复）"""
+        if "plan_text" in snapshot[1]:
+            self.curr_plan.setText(snapshot[1]["plan_text"])
+
+    def refresh_history_actions(self):
+        """根据撤销/重做栈刷新按钮状态"""
+        self.undo_button.setEnabled(self.history.can_undo)
+        self.redo_button.setEnabled(self.history.can_redo)
+
+    def update_timetable_cells(self,clas:Class,times):
+        """只更新课表中发生变化的格子，不重绘整张表"""
+        for curr_time in times:
+            row,column=curr_time.lesson-1,curr_time.day-1
+            subjects=clas.get_lessons(curr_time)
+            if not subjects:  # 变成空位：与整体重绘保持一致，不保留单元格
+                if self.timetable_preview.cellWidget(row,column) is not None:
+                    self.timetable_preview.removeCellWidget(row,column)
+                if self.timetable_preview.item(row,column) is not None:
+                    self.timetable_preview.takeItem(row,column)
+                continue
+            item=self.timetable_preview.item(row,column)
+            if item is None:  # 该位置原本是空位，没有 item
+                item=QTableWidgetItem("")
+                item.setTextAlignment(Qt.AlignCenter)
+                self.timetable_preview.setItem(row,column,item)
+            if len(subjects)>=2:  # 单双周两节课：用上下分隔的控件显示
+                sin_text=subjects[0].name+("\n"+str(clas.get_teacher(subjects[0])) if cfg.show_teachers.value else "")
+                dou_text=subjects[1].name+("\n"+str(clas.get_teacher(subjects[1])) if cfg.show_teachers.value else "")
+                self.timetable_preview.setCellWidget(row,column,sindou_widget(sin_text,dou_text,self.timetable_preview.font()))
+                item.setText("")
+            else:
+                if self.timetable_preview.cellWidget(row,column) is not None:
+                    self.timetable_preview.removeCellWidget(row,column)
+                item.setText(str(subjects[0])+("\n"+str(clas.get_teacher(subjects[0])) if cfg.show_teachers.value else ""))
+            item.setData(Qt.UserRole,item.text())
+
+    def on_history_restored(self,changed:dict[str,set[Time]]|None=None):
+        """撤销/重做后刷新界面：只更新发生变化的部分"""
+        self.hide_lesson_details()
+        self.refresh_history_actions()
+        if not changed:  # 不知道变化范围时才整体刷新
+            self.refresh_object_tree()
+            self.refresh_timetable()
+            return
+        changed={class_name:times for class_name,times in changed.items() if times}
+        if not changed:
+            return
+        self.refresh_object_tree(changed.keys())  # 只重建受影响班级的徽标
+        if getattr(self,"preview_mode",None)=="class":
+            times=changed.get(self.preview_object.name)
+            if times:
+                self.update_timetable_cells(self.preview_object,times)  # 只改变化的格子
+                self.show_stored_lesson_cards()  # 暂存区剩余数量可能变化
+        else:
+            self.refresh_timetable()  # 教师/学科/总表预览无法按格更新
+
+    def undo(self):
+        """撤销上一步对课表的修改"""
+        if not self.history.can_undo or not self.generate_button.isEnabled():
+            return  # 没有可撤销的操作或正在生成课程表
+        result=self.history.undo(self.history.snapshot(self.history_extra()))
+        if result is None:
+            return
+        self.apply_history_extra(result[0])
+        self.on_history_restored(result[1])
+        logging.info(f"已撤销上一步操作，还可撤销 {len(self.history.undo_stack)} 步")
+
+    def redo(self):
+        """重做被撤销的修改"""
+        if not self.history.can_redo or not self.generate_button.isEnabled():
+            return  # 没有可重做的操作或正在生成课程表
+        result=self.history.redo(self.history.snapshot(self.history_extra()))
+        if result is None:
+            return
+        self.apply_history_extra(result[0])
+        self.on_history_restored(result[1])
+        logging.info(f"已重做一步操作，还可重做 {len(self.history.redo_stack)} 步")
+
     def clear_timetables(self,clear_object):
         if not lesson_info.saved:
             msgbox=MessageBox("确定清空课程表？","这会使所选范围内班级课表的所有修改丢失，建议先保存当前课程表方案，是否继续清空？",self)
@@ -545,6 +558,7 @@ class Generate(QFrame):
             for item in custom_msgbox.class_combo.selectedItems():
                 class_lst.append(lesson_info.classes[item.text])
 
+        self.push_history()
         for clas in class_lst:
             clas.reset()
         self.refresh_timetable()
@@ -578,6 +592,7 @@ class Generate(QFrame):
                     return
                 class_lst=custom_msgbox.class_combo.checkedClasses()
 
+            self.push_history()
             # 禁用生成按钮防止重复点击
             self.generate_button.setEnabled(False)
             self.load_plan_action.setEnabled(False)
@@ -620,44 +635,13 @@ class Generate(QFrame):
         clas=self.preview_object
         rows=self.timetable_preview.rowCount()
         cols=self.timetable_preview.columnCount()
+        # 由后端计算每个位置能否放置，这里只负责染色
+        self.check_result,self.failed_reasons,self.conflict_lessons=check_placement(clas,source_subjects,source_time,exchange)
         for j in range(cols):
             for i in range(rows):
                 target_time=Time(j+1,i+1)
                 target_subjects=clas.get_lessons(target_time)
-                # 判断能否放置
-                can_place=False
-                failed_reasons=set()
-                conflict_lessons=set()
-                if exchange and source_time:
-                    # 交换模式：目标不能是自身，且要通过 check_exchange
-                    if not (i==source_time.lesson-1 and j==source_time.day-1):
-                        if target_subjects and check_exchange(clas,source_time,target_time,failed_reasons,conflict_lessons):
-                            can_place=True
-                        # 目标是空位：直接检查能否放置
-                        elif not target_subjects:
-                            if len(source_subjects)==1:
-                                can_place=check(clas,target_time,source_subjects[0],failed_reasons,conflict_lessons,True)
-                            elif len(source_subjects)==2:
-                                check1=check(clas,target_time.sin_week,source_subjects[0],failed_reasons,conflict_lessons,True)
-                                check2=check(clas,target_time.dou_week,source_subjects[1],failed_reasons,conflict_lessons,True)
-                                can_place=check1 and check2
-                else:
-                    # 添加模式（从暂存区拖来）
-                    if target_subjects:
-                        if len(target_subjects)==1 and target_subjects[0] in self.preview_object.half_subjects and source_subjects[0] in self.preview_object.half_subjects:
-                            can_place=check(clas,target_time.dou_week,source_subjects[0],failed_reasons,conflict_lessons,True)
-                        else:
-                            # 有课程：检查能否放下（先假设把原来的移到暂存区不检查，只检查新课程能否放这里）
-                            can_place=check(clas,target_time,source_subjects[0],failed_reasons,conflict_lessons,True)
-                    else:
-                        # 空位：直接检查能否放置
-                        if source_subjects[0] in self.preview_object.half_subjects:
-                            can_place=check(clas,target_time.sin_week,source_subjects[0],failed_reasons,conflict_lessons,True)
-                        else:
-                            can_place=check(clas,target_time,source_subjects[0],failed_reasons,conflict_lessons,True)
-                self.check_result[target_time]=can_place
-                self.failed_reasons[target_time]=failed_reasons
-                self.conflict_lessons[target_time]=conflict_lessons
+                can_place=self.check_result[target_time]
                 # 获取或创建 item，然后设置背景色
                 item=self.timetable_preview.item(i,j)
                 if not item:
@@ -673,7 +657,7 @@ class Generate(QFrame):
                     item.setToolTip("可以调课")
                 else:
                     item.setBackground(colors["no"])
-                    item.setToolTip("不可调课，原因：\n"+"\n".join(failed_reasons))
+                    item.setToolTip("不可调课，原因：\n"+"\n".join(self.failed_reasons[target_time]))
         if exchange and source_time:
             source_item=self.timetable_preview.item(source_time.lesson-1,source_time.day-1)
             if source_item:
@@ -705,6 +689,7 @@ class Generate(QFrame):
 
             teacher=clas.get_teacher(source_subjects[0])
             display_teachers_timetable(teacher,self.teacher_timetable_preview,False)
+            self.teacher_pane_teachers[self.teacher_timetable_preview]=teacher
             self.teacher_timetable_subheader.setText(f"任课教师 {teacher.name} 课程表")
             if curr_time:
                 teacher_item=self.teacher_timetable_preview.item(curr_time.lesson-1,curr_time.day-1)
@@ -713,6 +698,7 @@ class Generate(QFrame):
             if len(source_subjects)==2:
                 teacher2=clas.get_teacher(source_subjects[1])
                 display_teachers_timetable(teacher2,self.teacher2_timetable_preview,False)
+                self.teacher_pane_teachers[self.teacher2_timetable_preview]=teacher2
                 self.teacher_timetable_subheader.setText(f"单周任课教师 {teacher.name} 课程表")
                 self.teacher2_timetable_subheader.setText(f"双周任课教师 {teacher2.name} 课程表")
                 if curr_time:
@@ -747,6 +733,7 @@ class Generate(QFrame):
             logging.debug(f"清除课表高亮出错：{error}")
 
     def on_timetable_preview_clicked(self):
+        """选中项变化时显示课程详情（同一格上再次点击不会触发该信号）"""
         if self.preview_mode!="class":
             return
         curr_item=self.timetable_preview.currentItem()
@@ -757,6 +744,102 @@ class Generate(QFrame):
             return
         curr_time=Time(curr_item.column()+1,curr_item.row()+1)
         self.show_lesson_details(self.preview_object.get_lessons(curr_time),curr_time)
+
+    def on_timetable_preview_reclicked(self,item:QTableWidgetItem):
+        """再次单击当前单元格：在"选中"与"取消选中"之间切换"""
+        try:
+            if self.preview_mode!="class" or item is None:
+                return
+            curr_item=self.timetable_preview.currentItem()
+            if curr_item is not item:
+                return
+            curr_time=Time(item.column()+1,item.row()+1)
+            if curr_item.background()==colors["curr"]:  # 已选中 -> 取消选中
+                self.hide_lesson_details()
+                logging.debug(f"取消选中 {curr_time}")
+                return
+            self.show_lesson_details(self.preview_object.get_lessons(curr_time),curr_time)  # 未选中 -> 重新选中
+        except Exception as error:
+            logging.debug(f"取消选中课程出错：{error}")
+
+    def collect_double_clicked_lessons(self,item:QTableWidgetItem)->tuple[str,list[tuple[Class,Subject,Time]]]:
+        """收集双击位置上可跳转的课程，返回(弹窗标题,课程列表)"""
+        try:
+            table=self.sender()
+            if table is self.timetable_preview:  # 主预览区
+                if self.preview_mode=="teacher" and isinstance(self.preview_object,Teacher):
+                    lessons=get_teacher_lessons_at_cell(self.preview_object,item.row(),item.column())
+                    return f"{self.preview_object.name}老师在该位置共有{len(lessons)}节课",lessons
+                if self.preview_mode=="subject" and isinstance(self.preview_object,Subject):
+                    lessons=get_subject_lessons_at_cell(self.preview_object,item.row(),item.column(),self.preview_class_scope.checkedClasses())
+                    return f"{self.preview_object.name}在该位置共有{len(lessons)}节课",lessons
+                return "",[]
+            teacher=self.teacher_pane_teachers.get(table) if isinstance(table,QTableWidget) else None  # 右侧任课教师课程表
+            if teacher is None:
+                return "",[]
+            lessons=get_teacher_lessons_at_cell(teacher,item.row(),item.column())
+            return f"{teacher.name}老师在该位置共有{len(lessons)}节课",lessons
+        except Exception as error:
+            logging.debug(f"收集双击位置的课程出错：{error}")
+        return "",[]
+
+    def jump_to_class_from_cell(self,item:QTableWidgetItem):
+        """双击课程表上的课程时，跳转到对应班级的对应课程"""
+        try:
+            if item is None:
+                return
+            title,lessons=self.collect_double_clicked_lessons(item)
+            if not lessons:
+                if self.sender() is not self.timetable_preview or self.preview_mode not in ("teacher","subject"):
+                    return  # 班级课表/未知来源：不需要跳转，也不提示
+                logging.info("双击的位置没有课程，无需跳转")
+                return
+            if len(lessons)>1:  # 该位置有多节课，让用户选择跳转到哪一节
+                dialog=ChooseLessonMsgbox(title,lessons,self)
+                if not dialog.exec() or dialog.selected_lesson is None:
+                    logging.info("用户取消了跳转到班级课程")
+                    return
+                clas,subject,curr_time=dialog.selected_lesson
+            else:
+                clas,subject,curr_time=lessons[0]
+            logging.info(f"跳转到 {clas} 在 {curr_time} 的 {subject} 课")
+            self.goto_class_lesson(clas,curr_time)
+        except Exception as error:
+            e=traceback.format_exc()
+            logging.critical(f"跳转到班级课程出错：\n{e}")
+            show_error(self,error)
+
+    def find_class_item(self,class_name:str)->tuple[QTreeWidgetItem|None,QTreeWidgetItem|None]:
+        """在对象树中查找班级所在项，返回(年级项,班级项)"""
+        for grade_item,class_items in self.class_items.items():
+            for class_item in class_items:
+                if class_item.data(0,Qt.UserRole)==class_name:
+                    return grade_item,class_item
+        return None,None
+
+    def goto_class_lesson(self,clas:Class,curr_time:Time):
+        """切换到指定班级的课程表并选中指定位置"""
+        try:
+            grade_item,class_item=self.find_class_item(clas.name)
+            if class_item is None:
+                logging.warning(f"对象树中未找到班级 {clas.name}，无法跳转")
+                return
+            if class_item.isHidden():  # 被搜索关键字隐藏时清空搜索
+                self.object_search.clear()
+            if grade_item is not None:
+                grade_item.setExpanded(True)
+            self.classes_top_item.setExpanded(True)
+            if self.object_tree.currentItem() is class_item:
+                self.change_timetable()
+            else:
+                self.object_tree.setCurrentItem(class_item)
+            self.object_tree.scrollToItem(class_item)
+            target_time=curr_time.all_week
+            self.timetable_preview.setCurrentCell(target_time.lesson-1,target_time.day-1)
+            self.timetable_preview.setFocus()
+        except Exception as error:
+            logging.debug(f"跳转到班级 {clas.name} 出错：{error}")
+            raise
 
     def on_storage_dropped(self):
         if self.preview_mode!="class":
@@ -814,11 +897,13 @@ class Generate(QFrame):
             
             # 先检查新课程能否放入（不管目标位置是否已有课程）
             force=False
+            before=self.history.snapshot(self.history_extra())
             if not self.check_result[target_time]:
                 if not self.ask_force(target_time):
                     return
                 else:
                     force=True
+            self.push_history(before)
             # 目标位置已有课程：先把原课程移入暂存区
             target_subjects=clas.get_lessons(target_time)
             if len(target_subjects)==1 and target_subjects[0] in self.preview_object.half_subjects and not force and check(clas,target_time.dou_week,source_subject):
@@ -862,11 +947,13 @@ class Generate(QFrame):
             source_subjects=clas.get_lessons(source_time)
             if not source_subjects:
                 return
+            before=self.history.snapshot(self.history_extra())
             # 检查能否放下
             if not self.check_result[target_time]:
                 logging.info(f"课程不能移动到目标位置")
                 if not self.ask_force(target_time):
                     return
+            self.push_history(before)
             # 先移除源位置，再添加到目标位置
             clas.remove_lesson(source_time)
             for s in source_subjects:
@@ -886,6 +973,7 @@ class Generate(QFrame):
             subjects=self.preview_object.get_lessons(curr_time)
             if not subjects or (curr_time,subjects[0]) in self.preview_object.set_lessons.items():
                 return
+            self.push_history()
             self.preview_object.remove_lesson(curr_time)
             self.refresh_timetable()
             lesson_info.saved=False
@@ -908,9 +996,11 @@ class Generate(QFrame):
             
             logging.info(f"交换课程：{curr_time} 与 {target_time}")
             
+            before=self.history.snapshot(self.history_extra())
             if not self.check_result[target_time]:
                 if curr_subjects==target_subjects or not self.ask_force(target_time):
                     return
+            self.push_history(before)
             clas.exchange_lessons(curr_time,target_time)
 
             self.refresh_timetable(False)
@@ -1140,24 +1230,7 @@ class Generate(QFrame):
                 return
             plan_name=save_plan_msg.name_input.text()
             plan_desc=save_plan_msg.desc_input.text()
-            if plan_name not in cfg.timetable_plans.value:
-                # 过滤 Windows 文件名非法字符: \ / : * ? " < > |
-                plan_filename = plan_name.translate(str.maketrans({
-                    '\\': '_', '/': '_', ':': '_', '*': '_',
-                    '?': '_', '"': '_', '<': '_', '>': '_', '|': '_'
-                }))
-                while os.path.exists(os.path.join(appdata,"timetable_plans",plan_filename+".json")):
-                    plan_filename+="_"
-                plan_filename=os.path.join(appdata,"timetable_plans",plan_filename+".json")
-                cfg.timetable_plans.value[plan_name]={"desc":plan_desc,"time":plan_time,"filename":plan_filename}
-                save_settings()
-                if not os.path.exists(os.path.join(appdata,"timetable_plans")):
-                    os.mkdir(os.path.join(appdata,"timetable_plans"))
-                with open(plan_filename,"w",encoding="utf-8") as f:
-                    json.dump(lesson_info.classes,f,cls=LessonInfoEncoder,ensure_ascii=False)
-            else:
-                with open(cfg.timetable_plans.value[plan_name]["filename"],"w",encoding="utf-8") as f:
-                    json.dump(lesson_info.classes,f,cls=LessonInfoEncoder,ensure_ascii=False)
+            save_current_plan(plan_name,plan_desc,plan_time)
             self.curr_plan.setText("当前方案："+plan_name)
             lesson_info.saved=True
             self.refresh_plan_actions()
@@ -1180,35 +1253,14 @@ class Generate(QFrame):
                 if not msgbox.exec():
                     return
             plan_name=load_plan_msg.plan_list.selectedItems()[0].text().split("\n")[0]
-            filename=cfg.timetable_plans.value[plan_name]["filename"]
-            with open(filename,"r",encoding="utf-8") as f:
-                plan=json.load(f)
+            plan=read_plan_file(cfg.timetable_plans.value[plan_name]["filename"])
+            if not check_plan_compatible(plan):
+                Toast.error("课程表方案与当前设置不匹配",f"加载的课程表方案不是在当前设置下生成的",duration=-1,parent=self)
+                logging.error("课程表方案加载失败")
+                return
 
-            for class_name,timetable in plan.items():
-                if class_name not in lesson_info.class_names:
-                    Toast.error("课程表方案与当前设置不匹配",f"加载的课程表方案不是在当前设置下生成的",duration=-1,parent=self)
-                    logging.error("课程表方案加载失败")
-                    return
-                for time,subjects in timetable.items():
-                    if Time(string=time).lesson>cfg.day_class_num:
-                        Toast.error("课程表方案与当前设置不匹配",f"加载的课程表方案不是在当前设置下生成的",duration=-1,parent=self)
-                        logging.error("课程表方案加载失败")
-                        return
-                    for subject in subjects:
-                        if subject not in lesson_info.subjects:
-                            Toast.error("课程表方案与当前设置不匹配",f"加载的课程表方案不是在当前设置下生成的",duration=-1,parent=self)
-                            logging.error("课程表方案加载失败")
-                            return
-
-            for class_name,timetable in plan.items():
-                lesson_info.classes[class_name].reset()
-                for time,subjects in timetable.items():
-                    if len(subjects)==1:
-                        lesson_info.classes[class_name].add_lesson(Time(string=time),lesson_info.subjects[subjects[0]])
-                    elif len(subjects)==2:
-                        lesson_info.classes[class_name].add_lesson(Time(string=time).sin_week,lesson_info.subjects[subjects[0]])
-                        lesson_info.classes[class_name].add_lesson(Time(string=time).dou_week,lesson_info.subjects[subjects[1]])
-
+            self.push_history()
+            apply_plan(plan)
             self.curr_plan.setText("当前方案："+plan_name)
             logging.info("课程表方案加载成功")
             Toast.success("课程表方案加载成功",f"成功加载方案：{plan_name}",parent=self,duration=3000)
@@ -1230,15 +1282,11 @@ class Generate(QFrame):
                 logging.info("用户取消删除")
                 return
             plans=del_plan_msg.plan_list.selectedItems()
-            for plan in plans:
-                plan_name=plan.text().split("\n")[0]
-                if plan_name==self.curr_plan.text()[5:]:
-                    self.curr_plan.setText("当前方案：未保存")
-                    lesson_info.saved=False
-                filename=cfg.timetable_plans.value[plan_name]["filename"]
-                os.remove(filename)
-                del cfg.timetable_plans.value[plan_name]
-            save_settings()
+            plan_names=[plan.text().split("\n")[0] for plan in plans]
+            if self.curr_plan.text()[5:] in plan_names:
+                self.curr_plan.setText("当前方案：未保存")
+                lesson_info.saved=False
+            delete_plans(plan_names)
             self.refresh_plan_actions()
             logging.info("课程表方案删除成功")
             Toast.success("课程表方案删除成功！","",parent=self,duration=3000)

@@ -116,6 +116,8 @@ class TimeTableWidget(TableWidget):
     stored_lesson_dragmove = Signal(Subject)
     # 表格内拖到空位（emit (row, col)）
     table_dropped_on_empty = Signal(tuple)
+    # 再次按下当前已选中的单元格（emit item，用于"再次点击取消选中"）
+    reclicked = Signal(QTableWidgetItem)
 
     # 最近一次被拖动的暂存区卡片（DraggableLessonCard，由 DraggableLessonCard 设置）
     _dragged_card = None
@@ -131,6 +133,35 @@ class TimeTableWidget(TableWidget):
         self.setDropIndicatorShown(True)
         self.setDragDropMode(QAbstractItemView.DragDrop)
         self._dragged_item = None
+        self._press_item = None           # 鼠标按下时所在的单元格
+        self._press_current_item = None   # 鼠标按下时的当前项（选中项尚未改变）
+        self._press_pos = QPoint()        # 鼠标按下位置，用于区分点击与拖拽
+
+    # ---------------------------------------------------------------
+    # 鼠标按下/松开：识别"再次点击当前已选中的单元格"
+    # ---------------------------------------------------------------
+    def mousePressEvent(self, event):
+        # 此时选中项尚未变化，先记录状态，真正的判定放到 mouseReleaseEvent
+        if event.button() == Qt.LeftButton:
+            self._press_item = self.itemAt(event.position().toPoint())
+            self._press_current_item = self.currentItem()
+            self._press_pos = event.position().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        # currentItemChanged 在同一格上再次点击时不会触发，这里额外发信号供"再次点击取消选中"使用。
+        # 必须等松开且鼠标几乎没移动（是点击而非拖拽）才判定，
+        # 否则从已选中的格子开始拖拽时会先把高亮取消掉
+        if (event.button() == Qt.LeftButton and self._press_item is not None
+                and self._press_item is self._press_current_item
+                and self._press_item is self.currentItem()
+                and (event.position().toPoint() - self._press_pos).manhattanLength() < QApplication.startDragDistance()):
+            # 双击的第二次按下不会进入 mousePressEvent（走 mouseDoubleClickEvent），
+            # 因此这里天然只会切换一次，无需额外判断
+            self.reclicked.emit(self._press_item)
+        self._press_item = None
+        self._press_current_item = None
+        super().mouseReleaseEvent(event)
 
     # ---------------------------------------------------------------
     # 表格内拖拽：记录源位置
