@@ -341,7 +341,7 @@
       <span class="badge">PySide6</span>
     </div>
     <div class="hero-actions">
-      <a class="hero-cta" id="btnDownload" href="https://gitcode.com/2603_96523924/School-Timetable-Generator/releases/download/v2.1.0/School-Timetable-Generator-v2.1.0-Windows-x86_64-Setup.exe">
+      <a class="hero-cta" id="btnDownload" href="https://gitcode.com/hengdapi/School-Timetable-Generator/releases/download/v2.1.0/School-Timetable-Generator-v2.1.0-Windows-x86_64-Setup.exe">
         <svg class="hero-cta-gh" viewBox="0 0 24 24" fill="currentColor"><path d="M0 0h11.377v11.372H0zm12.623 0H24v11.372H12.623zM0 12.623h11.377V24H0zm12.623 0H24V24H12.623z"/></svg>
         下载 Windows 版
       </a>
@@ -349,7 +349,7 @@
         <svg class="hero-cta-gh" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.385-1.335-1.755-1.335-1.755-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23a11.52 11.52 0 013-.404c1.02.005 2.045.138 3 .404 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.605-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 21.795 24 17.295 24 12c0-6.63-5.37-12-12-12z"/></svg>
         GitHub
       </a>
-      <a class="hero-cta" href="https://gitcode.com/2603_96523924/School-Timetable-Generator" target="_blank">
+      <a class="hero-cta" href="https://gitcode.com/hengdapi/School-Timetable-Generator" target="_blank">
         <svg class="hero-cta-gh" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-.09 14.5c-2.37 0-4.41-1.83-4.41-4.5s2.04-4.5 4.41-4.5c1.43 0 2.68.63 3.54 1.63l-1.54 1.51c-.36-.54-.97-.88-1.99-.88-1.45 0-2.62 1.2-2.62 2.74s1.17 2.74 2.62 2.74c1.28 0 1.96-.66 2.24-1.25h-2.24v-1.99h4.12c.05.22.09.45.09.69 0 2.38-1.59 4.31-4.12 4.31z"/></svg>
         GitCode
       </a>
@@ -590,7 +590,7 @@
         <span class="step-badge">One Click</span>
         <h3>方式二 · 安装包即用</h3>
         <ol>
-          <li>前往 <a href="https://gitcode.com/2603_96523924/School-Timetable-Generator/releases" target="_blank">Releases 页面</a></li>
+          <li>前往 <a href="https://gitcode.com/hengdapi/School-Timetable-Generator/releases" target="_blank">Releases 页面</a></li>
           <li>下载 <code>Setup.exe</code> 安装程序</li>
           <li>双击安装，桌面生成快捷方式</li>
           <li>或下载 <code>.zip</code> 解压即用</li>
@@ -662,32 +662,6 @@ function closeLightbox(){
 }
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeLightbox()})
 
-// ─── 自动检测最新版本并更新下载链接（GitCode 优先，GitHub 兜底）───
-(function(){
-  const btn=document.getElementById('btnDownload')
-  if(!btn)return
-
-  const GC_API='https://api.gitcode.com/api/v5/repos/2603_96523924/School-Timetable-Generator/releases/latest'
-  const GH_API='https://api.github.com/repos/hengdapi/School-Timetable-Generator/releases/latest'
-
-  const parse=t=>(t||'').replace(/^v/i,'').split('.').map(n=>parseInt(n,10)||0)
-  const cmp=(a,b)=>{for(let i=0;i<Math.max(a.length,b.length);i++){const d=(a[i]||0)-(b[i]||0);if(d)return d}return 0}
-  const get=u=>fetch(u,{headers:{Accept:'application/vnd.github+json'}}).then(r=>{if(!r.ok)throw new Error(r.status);return r.json()})
-
-  Promise.allSettled([get(GC_API),get(GH_API)]).then(res=>{
-    let best=null
-    res.forEach(r=>{
-      if(r.status!=='fulfilled'||!r.value||!r.value.tag_name)return
-      const tag=r.value.tag_name
-      const assets=r.value.assets||[]
-      const exe=assets.find(a=>a.name&&/\.exe$/i.test(a.name))
-      const url=exe?exe.browser_download_url:null
-      if(!best||cmp(parse(tag),parse(best.tag))>0)best={tag,url}
-    })
-    if(!best)return
-    btn.href=best.url||('https://gitcode.com/2603_96523924/School-Timetable-Generator/releases/tag/'+best.tag)
-  })
-})()
 </script>
 </body>
 </html>
