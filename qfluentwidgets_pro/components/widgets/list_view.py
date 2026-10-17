@@ -299,23 +299,33 @@ class RoundListWidget(RoundListBase, QListWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-    def addItem(self, text: str, icon=None):
+    def addItem(self,item,icon=None):
         """Add an item with optional icon
+
+        与 ``QListWidget.addItem`` 保持兼容：``item`` 既可以是文本，
+        也可以是一个已构造好的 :class:`QListWidgetItem`。
 
         Parameters
         ----------
-        text : str
-            Item text
+        item : str | QListWidgetItem
+            Item text, or a ready-made item（可能已带 UserRole 等自定义数据）
         icon : FluentIconBase | QIcon | None
             Optional icon (FluentIcon for theme support, or QIcon)
         """
-        item = QListWidgetItem(self)
-        item.setText(text)
-        if icon is not None:
-            item.setData(Qt.DecorationRole, icon)
-        super().addItem(item)
+        if isinstance(item,QListWidgetItem):
+            # 外部已构造好：直接加入，不重建，避免丢掉 UserRole 等自定义数据
+            if icon is not None:
+                item.setData(Qt.DecorationRole,icon)
+            super().addItem(item)
+            return
 
-    def addItems(self, items: list):
+        newItem=QListWidgetItem(self)
+        newItem.setText(str(item) if item is not None else "")
+        if icon is not None:
+            newItem.setData(Qt.DecorationRole,icon)
+        super().addItem(newItem)
+
+    def addItems(self,items: list):
         """Add multiple items
 
         Parameters
@@ -324,10 +334,13 @@ class RoundListWidget(RoundListBase, QListWidget):
             List of items, each can be:
             - str: item text without icon
             - tuple (text, icon): item text with icon
+            - QListWidgetItem: a ready-made item
         """
         for item in items:
-            if isinstance(item, tuple):
-                self.addItem(item[0], item[1] if len(item) > 1 else None)
+            if isinstance(item,QListWidgetItem):
+                self.addItem(item)
+            elif isinstance(item,tuple):
+                self.addItem(item[0],item[1] if len(item)>1 else None)
             else:
                 self.addItem(item)
 

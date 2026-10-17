@@ -1,9 +1,10 @@
 # coding=utf-8
 import sys,logging,time
+import darkdetect
 from PySide6 import QtWidgets
 from PySide6.QtGui import QIcon,QFont
-from PySide6.QtCore import QLocale,QSize,QByteArray
-from qfluentwidgets_pro import MSFluentWindow,SplashScreen,FluentTranslator,setThemeColor,setTheme,Theme
+from PySide6.QtCore import QLocale,QSize,QByteArray,QTimer,QEvent,Qt
+from qfluentwidgets_pro import MSFluentWindow,SplashScreen,FluentTranslator,setThemeColor,setTheme,Theme,qconfig
 from qfluentwidgets_pro.common.icon import FluentIcon
 
 from locals import lesson_info
@@ -15,6 +16,8 @@ class Window(MSFluentWindow):
     def __init__(self):
         super().__init__()
         logging.debug("初始化主窗口")
+        # 记录普通状态下的几何信息，用于关闭时保存，避免 showNormal()/saveGeometry() 不同步
+        self._normal_geometry = None
         if sys.platform in ["win32","darwin"]:
             setThemeColor(getSystemAccentColor(),save=False)
         setTheme(Theme.AUTO,save=False)
@@ -42,6 +45,9 @@ class Window(MSFluentWindow):
             self._default_geometry()
             logging.debug("使用默认窗口位置和大小")
 
+        # 记录初始普通几何，避免窗口从未处于普通状态就关闭时无法保存
+        self._normal_geometry = self.geometry()
+
         #启动页面
         splashScreen=SplashScreen(self.windowIcon(),self)
         splashScreen.setIconSize(QSize(150,150))
@@ -62,7 +68,53 @@ class Window(MSFluentWindow):
         logging.debug("已添加所有子页面")
 
         splashScreen.finish()
+        # 监听系统颜色模式，运行时跟随系统热切换（无需重启）
+        self._init_system_theme_watcher()
         logging.info("主窗口初始化完成")
+
+    def _init_system_theme_watcher(self):
+        """定时检测系统颜色模式（读取注册表/系统设置，开销极小）"""
+        self._theme_timer = QTimer(self)
+        self._theme_timer.setInterval(1000)
+        self._theme_timer.timeout.connect(self._on_system_theme_tick)
+        self._theme_timer.start()
+
+    def _on_system_theme_tick(self):
+        """系统颜色模式发生变化时热切换界面主题"""
+        try:
+            # 仅在“跟随系统”模式下生效；若用户手动指定过颜色模式则不覆盖
+            if cfg.themeMode.value is not Theme.AUTO:
+                return
+            system_theme = Theme.DARK if str(darkdetect.theme()).lower() == "dark" else Theme.LIGHT
+            if system_theme == qconfig.theme:
+                return
+            logging.info(f"检测到系统颜色模式切换为{'深色' if system_theme is Theme.DARK else '浅色'}，正在热切换界面主题")
+            # 先让 qconfig 依据系统重新求解实际主题，再刷新全部样式表
+            qconfig.theme = Theme.AUTO
+            setTheme(Theme.AUTO, save=False)
+        except Exception as error:
+            logging.debug(f"检测系统颜色模式失败：{error}")
+
+    def resizeEvent(self, event):
+        """普通状态下记录当前几何，便于关闭时保存普通尺寸"""
+        if not self.isMaximized() and not self.isMinimized() and not self.isFullScreen():
+            self._normal_geometry = self.geometry()
+        super().resizeEvent(event)
+
+    def moveEvent(self, event):
+        """普通状态下记录当前几何，便于关闭时保存普通位置"""
+        if not self.isMaximized() and not self.isMinimized() and not self.isFullScreen():
+            self._normal_geometry = self.geometry()
+        super().moveEvent(event)
+
+    def changeEvent(self, event):
+        """窗口从最小化恢复后，强制触发一次布局更新，修正无边框窗口客户区错位"""
+        if event.type() == QEvent.Type.WindowStateChange:
+            old_state = event.oldState()
+            if old_state & Qt.WindowState.WindowMinimized:
+                # 等状态切换完成后再更新，避免拿到中间尺寸
+                QTimer.singleShot(0, self.update)
+        super().changeEvent(event)
 
     def _default_geometry(self):
         """没有记录时的默认尺寸和居中"""
@@ -93,9 +145,11 @@ class Window(MSFluentWindow):
             cfg.window_maximized.value = is_max
 
             # 若当前处于最大化，先恢复为普通状态再保存 geometry，
-            # 否则 saveGeometry 会保存最大化后的尺寸，导致下次启动异常
+            # 否则 saveGeometry 会保存最大化后的尺寸，导致下次启动异常。
             if is_max:
                 self.showNormal()
+                if self._normal_geometry:
+                    self.setGeometry(self._normal_geometry)
 
             state = self.saveGeometry()              # QByteArray
             cfg.window_geometry.value = bytes(state.toBase64()).decode()

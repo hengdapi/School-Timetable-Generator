@@ -60,6 +60,8 @@ class CheckUpdateThread(QThread):
                 self.no_update.emit()
             else:
                 self.has_update.emit(response)
+        except requests.exceptions.ConnectionError:
+            pass
         except Exception as err:
             e=traceback.format_exc()
             logging.critical(f"检查更新出错：\n{e}")
@@ -464,7 +466,6 @@ class Teacher:
         """
         self.name = name
         self.subjects:set[Subject]=set()
-        self.left_num:dict[Subject,dict[Time,int]]={}
         self.timetable:dict[Time,list[tuple[Class,Subject]]]={Time(day,lesson,week):[] for day in range(1,6) for lesson in range(1,cfg.day_class_num+1) for week in ["sin","dou","all"]}  # 记录教师已占用的课程时间
 
     def __str__(self):
@@ -484,7 +485,6 @@ class Teacher:
         """
         self.timetable[time].append((clas,subject))
         self.timetable[time].sort(key=lambda x:lesson_info.class_lst.index(x[0]))
-        self.left_num[subject][time]-=1
 
     def get_lessons(self,time:Time):
         return self.timetable[time]
@@ -501,21 +501,32 @@ class Teacher:
         else:
             return self.timetable[time.dou_week] or self.timetable[time.all_week]
 
+    def day_load(self,day:int)->int:
+        """
+        统计教师在指定星期几已排的课时数
+        :param day: 星期几（1~5）
+        :return: 该天的课时数（单双周课程各计 1 节）
+        """
+        cnt=0
+        for lesson in range(1,cfg.day_class_num+1):
+            time=Time(day,lesson)
+            cnt+=len(self.timetable[time.sin_week])
+            cnt+=len(self.timetable[time.dou_week])
+            cnt+=len(self.timetable[time.all_week])
+        return cnt
+
     def check(self,time:Time,subject:Subject,failed_reasons:set|None=None,conflict_lessons:set|None=None)->bool:
-        res=True
         if not self.is_busy(time):
             return True
-        if self.left_num[subject][time]<=0 or not self.timetable[time] or self.timetable[time][0][1]!=subject:
-            res=False
-            if failed_reasons is None:
-                return False
-            for conflict_time in (time.sin_week,time.dou_week,time.all_week) if time.all else (time,time.all_week):
-                if not self.get_lessons(conflict_time):
-                    continue
-                for conflict_class,conflict_subject in self.get_lessons(conflict_time):
-                    failed_reasons.add(f"课程冲突：{subject} 的任课老师 {self} 在 {conflict_time} 有 {conflict_class} 的 {conflict_subject} 课")
-                    conflict_lessons.add((conflict_class,conflict_time))
-        return res
+        if failed_reasons is None:
+            return False
+        for conflict_time in (time.sin_week,time.dou_week,time.all_week) if time.all else (time,time.all_week):
+            if not self.get_lessons(conflict_time):
+                continue
+            for conflict_class,conflict_subject in self.get_lessons(conflict_time):
+                failed_reasons.add(f"课程冲突：{subject} 的任课老师 {self} 在 {conflict_time} 有 {conflict_class} 的 {conflict_subject} 课")
+                conflict_lessons.add((conflict_class,conflict_time))
+        return False
 
     def remove_lesson(self,time:Time,clas:Class|None=None):
         """
@@ -523,7 +534,6 @@ class Teacher:
         """
         for lessons in self.timetable[time]:
             if lessons[0]==clas or not clas:
-                self.left_num[lessons[1]][time]+=1
                 self.timetable[time].remove(lessons)
 
     @property
@@ -723,6 +733,25 @@ class Class:
                 break
         return cnt
 
+    def last_lesson_distance(self,curr_time:Time)->dict[Subject,int]:
+        """
+        统计各学科最近一次排课距离当前时间有多少个课时
+        :param curr_time: 当前时间
+        :return: {学科: 距离}，距离为 0 表示上一节就是该学科，本周未排过的学科不在字典中
+        """
+        distances:dict[Subject,int]={}
+        back_time=curr_time.prev
+        distance=0
+        while back_time>Time(1,1):
+            lessons=self.get_lessons(back_time)
+            if lessons:
+                for lesson in lessons:
+                    if lesson not in distances:
+                        distances[lesson]=distance
+            back_time=back_time.prev
+            distance+=1
+        return distances
+
     @property
     def empty(self)->bool:
         for time,subjects in self.timetable.items():
@@ -777,6 +806,7 @@ class LessonInfo:
         self.class_names:list[str]=[]
         self.class_lst:list[Class]=[]
         self.grades:dict[str,Grade]={}
+        self.merged_lessons:dict[Subject,list[list[Class]]]={}
         self.saved=True
         logging.info("正在解析课程信息...")
         lessons=cfg.lessons_info.value
@@ -799,8 +829,6 @@ class LessonInfo:
                 if clas[subject+" - 任课老师"]:
                     self.classes[class_name].teachers[subject]=self.teachers[clas[subject+" - 任课老师"]]
                     self.teachers[clas[subject+" - 任课老师"]].subjects.add(self.subjects[subject])
-                    max_num=cfg.teachers_max_num.value.get(clas[subject+" - 任课老师"],{}).get(subject,1)
-                    self.teachers[clas[subject+" - 任课老师"]].left_num[self.subjects[subject]]={Time(day,lesson,week):max_num for day in range(1,6) for lesson in range(1,cfg.day_class_num+1) for week in ["sin","dou","all"]}
                     lesson_count=int(clas[subject+" - 课时"])
                     for i in range(lesson_count):
                         self.classes[class_name].left_subjects.append(self.subjects[subject])
@@ -814,6 +842,8 @@ class LessonInfo:
                 self.grades[grade_name].classes.append(self.classes[class_name])
                 self.classes[class_name].grade=self.grades[grade_name]
 
+        self.parse_merged_lessons()
+
         self.class_names=list(self.classes.keys())
         self.class_lst=list(self.classes.values())
         self.teacher_lst=list(self.teachers.values())
@@ -822,14 +852,28 @@ class LessonInfo:
         self.grade_lst=list(self.grades.values())
         sys.setrecursionlimit(max(len(self.classes)*5*cfg.day_class_num*2,1000))
 
-        for teacher in self.teacher_lst:
-            if teacher.name not in cfg.teachers_max_num.value:
-                cfg.teachers_max_num.value[teacher.name]={}
-            for subject in teacher.subjects:
-                if subject.name not in cfg.teachers_max_num.value[teacher.name]:
-                    cfg.teachers_max_num.value[teacher.name][subject.name]=1
         save_settings()
         logging.debug("课程信息解析完成")
+
+    def parse_merged_lessons(self):
+        """
+        按 cfg.merged_lessons 重建并课信息（可重复调用）
+
+        并课信息里存的是班级对象，必须和 self.classes 里的是同一批对象，
+        所以设置页改完并课后要重新解析一次，否则生成算法与调课检查用的还是旧的并课信息。
+        这里只重建并课信息，不像 __init__ 那样把班级对象整个换掉
+        （换掉会让界面上已缓存的班级对象失效，并课也就对不上了）。
+        """
+        self.merged_lessons={}
+        for merged_lesson in cfg.merged_lessons.value:
+            merged_subject=self.subjects.get(merged_lesson[0])
+            if merged_subject is None:  # 学科已被删除
+                continue
+            merged_classes=[self.classes[class_name] for class_name in merged_lesson[1] if class_name in self.classes]
+            if len(merged_classes)<2:  # 班级已被删除，凑不满一组并课
+                continue
+            self.merged_lessons.setdefault(merged_subject,[]).append(merged_classes)
+
 lesson_info=LessonInfo()
 
 logging.info("课程信息解析完毕，生成初始化完成")
@@ -862,3 +906,12 @@ def del_cfg_diff(diff_classes:set,diff_teachers:set,diff_subjects:set)->None:
                 rule["scope"].remove(class_name)
         new_rules.append(rule)
     cfg.rules.value=new_rules
+    # 并课设置里引用了已删除的班级或学科的，一并清掉，避免重启后残留无效配置
+    new_merged_lessons=[]
+    for merged_lesson in cfg.merged_lessons.value:
+        if merged_lesson[0] in diff_subjects:
+            continue
+        class_names=[class_name for class_name in merged_lesson[1] if class_name not in diff_classes]
+        if len(class_names)>=2:
+            new_merged_lessons.append((merged_lesson[0],class_names))
+    cfg.merged_lessons.value=new_merged_lessons

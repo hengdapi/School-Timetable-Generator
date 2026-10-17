@@ -87,14 +87,25 @@ class DelTimetablePlan(MessageBoxBase):
         return True
 
 class ForceExchangeMsgbox(MessageBoxBase):
-    def __init__(self,failed_reasons:set[str],conflict_lessons:set[tuple[Class,Time]], parent=None):
+    def __init__(self,failed_reasons:dict[str,set[str]],conflict_lessons:set[tuple[Class,Time]], parent=None):
         super().__init__(parent=parent)
         subheader("强制调课",self,self.viewLayout)
         write("由于以下原因，您的调课操作无法完成：",self,self.viewLayout,0)
-        self.reason_list=RoundListWidget()
-        self.reason_list.setFixedSize(700,min(len(failed_reasons)*50,230))
-        self.reason_list.addItems(failed_reasons)
-        add_widget(self.reason_list,self.viewLayout,0)
+        self.reason_tree=TreeWidget()
+        self.reason_tree.setHeaderHidden(True)
+        for lesson,reasons in failed_reasons.items():
+            if not reasons:
+                continue
+            top_item=QTreeWidgetItem()
+            top_item.setText(0,lesson)
+            for reason in reasons:
+                child_item=QTreeWidgetItem()
+                child_item.setText(0,reason)
+                top_item.addChild(child_item)
+            self.reason_tree.addTopLevelItem(top_item)
+        self.reason_tree.setFixedSize(700,230)
+        self.reason_tree.expandAll()
+        add_widget(self.reason_tree,self.viewLayout,0)
         write("是否要强制调课？",self,self.viewLayout,0)
         if conflict_lessons:
             write("强制调课后，以下导致冲突的课程将会自动放在对应班级的暂存区中：",self,self.viewLayout,0)
@@ -149,6 +160,7 @@ class ChooseLessonMsgbox(MessageBoxBase):
         self.delegate.sizeHint=lambda option,idx:QSize(option.rect.width(),48)
         self.class_list.setItemDelegate(self.delegate)
         self.class_list.setFixedHeight(min(len(lessons)*50,300))
+        self.class_list.itemDoubleClicked.connect(self.validate)
         for clas,subject,time in lessons:
             self.class_list.addItem(f"{clas}  {subject}  {time}")
         add_widget(self.class_list,self.viewLayout,0)

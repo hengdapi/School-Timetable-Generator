@@ -153,8 +153,7 @@ class PriorityTimeRule(Rule):
 class SetNumRule(Rule):
     type="set_num"
     text="{subjects}|学科同一时间最多排|{number}|节课"
-    desc=("指定学科同一时间最多排指定数量的课程，该规则可用于防止专业课教室冲突\n"
-          "与下方“设置老师同时上课最大数量”不同的是，该规则限制的是同一学科、不同班级、不同教师在同一时间的最大排课数量")
+    desc="指定学科同一时间最多排指定数量的课程，该规则可用于防止专业课教室冲突"
     args={"number":RuleArg("number","int"),"subjects":RuleArg("subjects","multi")}
     def __init__(self,scope:list[str],number:int,subjects:list[str]):
         super().__init__(scope)

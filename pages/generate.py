@@ -1,19 +1,33 @@
 import os.path
 
 from PySide6 import QtGui
-from PySide6.QtCore import QByteArray,QRectF
+from PySide6.QtCore import QRectF
 from PySide6.QtGui import QKeySequence,QShortcut
 
 from core.generate_core import *
 from core.save_core import SaveThread
 from core.system_notification import send_system_notification
+from core.taskbar_progress import TaskbarProgress
 from core.timetable_core import *
 from pages.dialogs import *
 
 # 读取配置文件
 cfg=load_settings()
-colors={"Light":{"yes":QColor(150,255,150),"no":QColor(255,150,150),"curr":QColor(255,255,200),"same":QColor(170,170,255)},
-        "Dark":{"yes":QColor(100,200,100),"no":QColor(200,100,100),"curr":QColor(170,170,100),"same":QColor(170,170,255)}}[darkdetect.theme() if darkdetect.theme() else "Light"]
+
+# 课表高亮配色：浅色 / 深色两套
+_light_colors={"yes":QColor(150,255,150),"no":QColor(255,150,150),"curr":QColor(255,255,200),"same":QColor(170,170,255)}
+_dark_colors={"yes":QColor(100,200,100),"no":QColor(200,100,100),"curr":QColor(170,170,100),"same":QColor(170,170,255)}
+# 模块级 colors 始终是同一个 dict 实例，主题热切换时原地更新，
+# 这样各处 `colors[...]` 引用无需重新赋值即可拿到新配色
+colors=dict(_light_colors)
+
+def refresh_colors()->dict:
+    """按当前实际主题刷新高亮配色（原地更新 colors）"""
+    colors.clear()
+    colors.update(_dark_colors if isDarkTheme() else _light_colors)
+    return colors
+
+refresh_colors()
 
 class HistoryIcon(FluentIconBase,Enum):
     """撤销/重做图标（FluentIcon 未内置，直接使用组件自带的 svg 资源）"""
@@ -32,6 +46,11 @@ class ColorSwatch(QWidget):
         self._color = QColor(color)
         self.setFixedSize(size, size)
 
+    def set_color(self, color: QColor):
+        """主题切换后更新色块颜色"""
+        self._color = QColor(color)
+        self.update()
+
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
@@ -46,6 +65,8 @@ def make_legend(parent=None) -> QWidget:
     layout = QHBoxLayout(legend)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(16)
+    # 记录各色块，主题热切换时按新配色刷新
+    legend.swatches = {}
     for key, text in (
         ("yes", "可以调课"),
         ("no", "不可调课"),
@@ -57,6 +78,7 @@ def make_legend(parent=None) -> QWidget:
         item_layout.setContentsMargins(0, 0, 0, 0)
         item_layout.setSpacing(6)
         swatch = ColorSwatch(colors[key], parent=item)
+        legend.swatches[key] = swatch
         text_label = BodyLabel(text, item)
         text_label.setFont(fonts.button)
         item_layout.addWidget(swatch)
@@ -67,10 +89,12 @@ def make_legend(parent=None) -> QWidget:
 class Generate(QFrame):
     def __init__(self,parent=None):
         super().__init__(parent=parent)
+        # 模块加载时主窗口可能还没应用系统主题，这里按当前实际主题再校正一次配色
+        refresh_colors()
         self.setObjectName("Generate")
         main_layout = QVBoxLayout(self)
         self.check_result:dict[Time,bool]={}
-        self.failed_reasons:dict[Time,set]={}
+        self.failed_reasons:dict[Time,dict[str,set[str]]]={}
         self.conflict_lessons:dict[Time,set[tuple[Class,Time]]]={}
         self.teacher_pane_teachers:dict[QTableWidget,Teacher]={}  # 右侧教师课程表预览对应的老师
         self.history=TimetableHistory()  # 课表修改历史（撤销/重做）
@@ -91,18 +115,17 @@ class Generate(QFrame):
         self.generate_button.setIcon(FluentIcon.BRUSH)
         self.generate_button.setFixedSize(160,40)
         self.generate_menu=RoundMenu()
-        self.generate_left_action=Action("生成剩余课表",triggered=lambda :self.generate_timetables("left"))
         self.generate_school_action=Action("生成全校课表",triggered=lambda :self.generate_timetables("school"))
         self.generate_grade_action=Action("生成本年段课表",triggered=lambda :self.generate_timetables("grade"))
         self.generate_class_action=Action("生成本班课表",triggered=lambda :self.generate_timetables("class"))
         self.generate_custom_action=Action("生成自定义部分课表",triggered=lambda :self.generate_timetables("custom"))
         self.generate_grade_action.setEnabled(False)
         self.generate_class_action.setEnabled(False)
-        self.generate_menu.addActions([self.generate_left_action,self.generate_school_action,self.generate_grade_action,self.generate_class_action,self.generate_custom_action])
+        self.generate_menu.addActions([self.generate_school_action,self.generate_grade_action,self.generate_class_action,self.generate_custom_action])
         self.generate_button.setMenu(self.generate_menu)
         add_widget(self.generate_button,self.operation_layout,0)
 
-        self.clear_button=PrimaryDropDownPushButton()
+        self.clear_button=DropDownPushButton()
         self.clear_button.setText("清空课程表")
         self.clear_button.setIcon(FluentIcon.DELETE)
         self.clear_button.setFixedSize(160,40)
@@ -117,7 +140,7 @@ class Generate(QFrame):
         self.clear_button.setMenu(self.clear_menu)
         add_widget(self.clear_button,self.operation_layout,0)
 
-        self.save_button=PrimaryDropDownPushButton()
+        self.save_button=DropDownPushButton()
         self.save_button.setText("导出课程表")
         self.save_button.setToolTip("直接导出最终的Excel课程表表格")
         self.save_button.setIcon(FluentIcon.SAVE)
@@ -237,20 +260,20 @@ class Generate(QFrame):
         self.teacher_timetable_pane.hide()
         self.teacher_timetable_layout=QVBoxLayout(self.teacher_timetable_pane)
         self.teacher_timetable_subheader=subheader("教师课程表",self,self.teacher_timetable_layout,0)
-        self.teacher_timetable_preview=QTableWidget()
+        self.teacher_timetable_preview=FontTableWidget()
         self.teacher_timetable_preview.setFont(QFont("Microsoft YaHei", 7))
+        self.teacher_timetable_preview.horizontalHeader().setFixedHeight(15)
         self.teacher_timetable_preview.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.teacher_timetable_preview.verticalHeader().setVisible(False)
-        self.teacher_timetable_preview.setStyleSheet("QTableWidget { border: none; }")
         self.teacher_timetable_preview.itemDoubleClicked.connect(self.jump_to_class_from_cell)
         add_widget(self.teacher_timetable_preview,self.teacher_timetable_layout,10)
 
         self.teacher2_timetable_subheader=subheader("教师2课程表",self,self.teacher_timetable_layout,0)
-        self.teacher2_timetable_preview=QTableWidget()
+        self.teacher2_timetable_preview=FontTableWidget()
         self.teacher2_timetable_preview.setFont(QFont("Microsoft YaHei", 7))
+        self.teacher2_timetable_preview.horizontalHeader().setFixedHeight(15)
         self.teacher2_timetable_preview.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.teacher2_timetable_preview.verticalHeader().setVisible(False)
-        self.teacher2_timetable_preview.setStyleSheet("QTableWidget { border: none; }")
         self.teacher2_timetable_preview.itemDoubleClicked.connect(self.jump_to_class_from_cell)
         add_widget(self.teacher2_timetable_preview,self.teacher_timetable_layout,0)
 
@@ -278,14 +301,20 @@ class Generate(QFrame):
 
         self.log_label:BodyLabel=BodyLabel()
         self.progress_toast.addWidget(self.log_label,alignment=Qt.AlignCenter)
+        self.taskbar_progress=TaskbarProgress()  # Windows 任务栏进度条
         self.stop_generate=PushButton()
         self.stop_generate.setText("停止生成")
         self.progress_toast.addWidget(self.stop_generate,alignment=Qt.AlignCenter)
         self.stop_generate.clicked.connect(lambda :setattr(self.generate_thread,"finish",True))
         self.progress_toast.hide()
 
+        # 系统颜色模式热切换后刷新硬编码的高亮配色与图例
+        qconfig.themeChangedFinished.connect(self.on_theme_changed)
+
     def resizeEvent(self, event: QtGui.QResizeEvent, /) -> None:
-        self.set_timetables_size()
+        # 延迟到下一事件循环，等窗口完成最小化/最大化/还原的状态切换后再重算课表尺寸，
+        # 避免在状态转换中间拿到错误的内部尺寸。
+        QTimer.singleShot(50, self.set_timetables_size)
         super().resizeEvent(event)
 
     def show_object_tree(self):
@@ -573,10 +602,7 @@ class Generate(QFrame):
                 if not msgbox.exec():
                     return
 
-            if generate_object=="left":
-                logging.info("生成剩余课表")
-                class_lst="left"
-            elif generate_object=="school":
+            if generate_object=="school":
                 logging.info("生成全校课表")
                 class_lst=lesson_info.class_lst
             elif generate_object=="grade":
@@ -598,6 +624,9 @@ class Generate(QFrame):
             self.load_plan_action.setEnabled(False)
             self.progress_toast.show()
             self.progress_bar.setValue(0)
+            # 任务栏图标上同步显示进度（绑定主窗口，先滚动，拿到具体进度后切百分比）
+            self.taskbar_progress.bind(self.window())
+            self.taskbar_progress.set_indeterminate()
 
             # 创建并启动线程
             self.generate_start_time=time.time()
@@ -609,18 +638,37 @@ class Generate(QFrame):
         except Exception as error:
             e=traceback.format_exc()
             logging.critical(f"生成课程表出错：\n{e}")
+            self.taskbar_progress.clear()
             show_error(self,error)
+
+    def is_window_in_background(self) -> bool:
+        """判断应用窗口是否处于后台（最小化/隐藏/被其他程序遮挡），用于决定是否需要系统通知"""
+        try:
+            app=QApplication.instance()
+            # 应用整体未处于激活状态：用户切到其他程序，或窗口已最小化到任务栏
+            if app is not None and app.applicationState()!=Qt.ApplicationActive:
+                return True
+            main_window=self.window()
+            # 主窗口被最小化或隐藏（兼容无边框窗口最小化后激活状态未同步的情况）
+            return bool(main_window.isMinimized()
+                        or (main_window.windowState() & Qt.WindowMinimized)
+                        or not main_window.isVisible())
+        except Exception as error:
+            logging.warning(f"判断窗口状态失败：{error}")
+            return False
 
     def on_generation_finished(self,skipped_lessons:set[tuple[Class,Time]]):
         logging.info("排课已完成")
-        if skipped_lessons:
-            skipped_text="、".join(f"{clas} {time}" for clas,time in list(skipped_lessons)[:3])
-            notify_message=f"课表生成完成，有 {len(skipped_lessons)} 节课未自动安排"
-            notify_message+=f"：{skipped_text}" if len(skipped_lessons)<=3 else f"，如 {skipped_text}"
-            notify_message+="，请手动调整"
-        else:
-            notify_message="所有课程均已安排完成"
-        send_system_notification("排课完成",notify_message)
+        # 仅在应用窗口处于后台（最小化/被其他程序遮挡/隐藏）时才发送系统通知，聚焦时用应用内 Toast 提示即可
+        if self.is_window_in_background():
+            if skipped_lessons:
+                skipped_text="、".join(f"{clas} {time}" for clas,time in list(skipped_lessons)[:3])
+                notify_message=f"课表生成完成，有 {len(skipped_lessons)} 节课未自动安排"
+                notify_message+=f"：{skipped_text}" if len(skipped_lessons)<=3 else f"，如 {skipped_text}"
+                notify_message+="，请手动调整"
+            else:
+                notify_message="所有课程均已安排完成"
+            send_system_notification("排课完成",notify_message)
 
         Toast.success("自动排课完成","跳过了以下课程：\n"+"\n".join([f"{clas} {time}" for clas,time in skipped_lessons]) if skipped_lessons else "没有跳过课程",duration=-1 if skipped_lessons else 4000,parent=self)
         lesson_info.saved=False
@@ -628,6 +676,7 @@ class Generate(QFrame):
         self.refresh_plan_actions()
         self.curr_plan.setText("当前方案：未保存")
         self.progress_toast.hide()
+        self.taskbar_progress.clear()
         self.refresh_object_tree()
         self.refresh_timetable()
 
@@ -657,7 +706,12 @@ class Generate(QFrame):
                     item.setToolTip("可以调课")
                 else:
                     item.setBackground(colors["no"])
-                    item.setToolTip("不可调课，原因：\n"+"\n".join(self.failed_reasons[target_time]))
+                    reason_str=""
+                    for lesson,reasons in self.failed_reasons[target_time].items():
+                        if not reasons:
+                            continue
+                        reason_str+=lesson+"：\n - "+"\n - ".join(reasons)+"\n\n"
+                    item.setToolTip("不可调课，原因：\n"+reason_str[:-2])
         if exchange and source_time:
             source_item=self.timetable_preview.item(source_time.lesson-1,source_time.day-1)
             if source_item:
@@ -685,6 +739,8 @@ class Generate(QFrame):
             if self.preview_mode!="class" or not source_subjects:
                 return
             clas=self.preview_object
+            # 记录本次高亮的参数，主题切换时用新配色重绘
+            self._last_details_args=(source_subjects,curr_time,exchange)
             self.show_check_result(source_subjects,curr_time,exchange)
 
             teacher=clas.get_teacher(source_subjects[0])
@@ -727,10 +783,23 @@ class Generate(QFrame):
                         item.setBackground(QtGui.QBrush(Qt.NoBrush))
                         item.setToolTip("")
             self._active_stored_subject=None
+            self._last_details_args=None
             self.timetable_legend.hide()
             self.teacher_timetable_pane.hide()
         except Exception as error:
             logging.debug(f"清除课表高亮出错：{error}")
+
+    def on_theme_changed(self):
+        """系统颜色模式热切换后：刷新高亮配色、图例色块，并用新配色重绘当前高亮"""
+        try:
+            refresh_colors()
+            for key, swatch in getattr(self.timetable_legend, "swatches", {}).items():
+                swatch.set_color(colors[key])
+            args = getattr(self, "_last_details_args", None)
+            if args and getattr(self, "preview_mode", None) == "class":
+                self.show_lesson_details(*args)
+        except Exception as error:
+            logging.debug(f"主题切换后刷新课表高亮失败：{error}")
 
     def on_timetable_preview_clicked(self):
         """选中项变化时显示课程详情（同一格上再次点击不会触发该信号）"""
@@ -916,6 +985,8 @@ class Generate(QFrame):
                 self.show_stored_lesson_cards()
                 # 添加新课程
                 clas.add_lesson(target_time,source_subject)
+            # 并课课程：并课班级也放入对应课程（并课班级要在同一时间上这门课）
+            add_merged_lesson(clas,target_time,source_subject)
             self.refresh_object_tree()
             self.refresh_timetable(False)
             self.show_lesson_details(clas.get_lessons(target_time),target_time)
@@ -958,6 +1029,8 @@ class Generate(QFrame):
             clas.remove_lesson(source_time)
             for s in source_subjects:
                 clas.add_lesson(target_time,s)
+            # 并课课程：并课班级的对应课程跟着一起移动
+            adjust_merged_lessons(clas,source_time,target_time,source_subjects)
             self.refresh_timetable()
             self.show_lesson_details(source_subjects,target_time)
             lesson_info.saved=False
@@ -975,6 +1048,8 @@ class Generate(QFrame):
                 return
             self.push_history()
             self.preview_object.remove_lesson(curr_time)
+            # 并课课程：并课班级的对应课程跟着一起收回暂存区
+            store_merged_lessons(self.preview_object,curr_time,subjects)
             self.refresh_timetable()
             lesson_info.saved=False
             self.refresh_object_tree()
@@ -1002,6 +1077,9 @@ class Generate(QFrame):
                     return
             self.push_history(before)
             clas.exchange_lessons(curr_time,target_time)
+            # 并课课程：并课班级的对应课程跟着一起调整（两个方向上的课程都要跟）
+            adjust_merged_lessons(clas,curr_time,target_time,curr_subjects)
+            adjust_merged_lessons(clas,target_time,curr_time,target_subjects)
 
             self.refresh_timetable(False)
             self.refresh_object_tree()
@@ -1168,6 +1246,7 @@ class Generate(QFrame):
             used_time=round(time.time()-self.generate_start_time)
             self.log_label.setText(f"当前进度：{progress[2]}%%，班级：{progress[0].name}，课时：{progress[1]}，已用时间：%02d:%02d"%(used_time//60,used_time%60))
             self.progress_bar.setValue(progress[2])
+            self.taskbar_progress.set_value(progress[2])
         except Exception as error:
             e=traceback.format_exc()
             logging.critical(f"生成课程表出错：\n{e}")

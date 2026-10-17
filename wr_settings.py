@@ -26,7 +26,7 @@ class Settings(QConfig):
     reduce_continue=OptionsConfigItem("rules","reduce_continue",True,BoolValidator())
     average_subjects=OptionsConfigItem("rules","average_subjects",True,BoolValidator())
     allow_noon_continuous=OptionsConfigItem("rules","allow_noon_continuous",False,BoolValidator())
-    teachers_max_num=ConfigItem("rules","teachers_max_num",{},restart=True)
+    merged_lessons=OptionsConfigItem("rules","merged_lessons",[])
     max_tries=RangeConfigItem("rules","max_tries",10000,RangeValidator(1000,100000))
 
     object_splitter_state=ConfigItem("ui","object_splitter_state",None)

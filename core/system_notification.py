@@ -70,6 +70,11 @@ if sys.platform == "win32":
         _shell32.Shell_NotifyIconW.restype = wintypes.BOOL
         _shell32.Shell_NotifyIconW.argtypes = (wintypes.DWORD, ctypes.c_void_p)
 
+        # 设置进程的 AppUserModel ID，这样系统通知使用自定义标题而不是 exe 文件名
+        _shell32.SetCurrentProcessExplicitAppUserModelID.argtypes = [ctypes.c_wchar_p]
+        _shell32.SetCurrentProcessExplicitAppUserModelID.restype = None
+        _shell32.SetCurrentProcessExplicitAppUserModelID("课程表生成器")
+
         _user32.CreateWindowExW.restype = wintypes.HWND
         _user32.CreateWindowExW.argtypes = (
             wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,

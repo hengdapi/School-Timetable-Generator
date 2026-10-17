@@ -96,6 +96,67 @@ class WarningBanner(InfoBar):
 
 
 # =====================================================================
+# 支持字体调整的表格
+# =====================================================================
+class FontTableWidget(TableWidget):
+    """可通过 setFont() 调整单元格字体的表格控件。
+
+    库自带的 TableItemDelegate 在 initStyleOption 里把单元格字体写死为 13px
+    的应用字体（只有 item 设置了 Qt.FontRole 时才使用 item 自己的字体），
+    所以直接调用 table.setFont() 对单元格内容无效。
+    这里把字体写入每个 item 的 Qt.FontRole，setItem 时自动带上；
+    表头字号被 QSS 固定成 13px，额外追加一段样式覆盖它。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+        self._item_font: QFont | None = None
+        self._extra_qss = ""
+        # 主题热切换会重设整个样式表，追加的自定义规则需要在之后重新应用
+        qconfig.themeChangedFinished.connect(self._apply_extra_qss)
+
+    def setFont(self, font: QFont):
+        super().setFont(font)
+        self._item_font = QFont(font)
+        self._apply_item_font()
+        self._apply_extra_qss()
+
+    def setItem(self, row: int, column: int, item: QTableWidgetItem):
+        # 新放入的 item 也要用同一字体，否则填表后字体又会回到默认的 13px
+        if self._item_font is not None:
+            item.setData(Qt.FontRole, self._item_font)
+        super().setItem(row, column, item)
+
+    def _apply_item_font(self):
+        """把字体写入所有已有 item 的 Qt.FontRole"""
+        if self._item_font is None:
+            return
+        for row in range(self.rowCount()):
+            for column in range(self.columnCount()):
+                item = self.item(row, column)
+                if item is not None:
+                    item.setData(Qt.FontRole, self._item_font)
+
+    def _apply_extra_qss(self):
+        """覆盖库 QSS：表头字号、单元格左右内边距"""
+        if self._item_font is None:
+            return
+        try:
+            # 先移除上一次追加的规则，避免反复 setFont 时样式表无限增长
+            if self._extra_qss:
+                self.setStyleSheet(self.styleSheet().replace(self._extra_qss, ""))
+            size = self._item_font.pointSize()
+            size = f"{size}pt" if size > 0 else f"{max(1, self._item_font.pixelSize())}px"
+            font_qss = f'QHeaderView::section{{font: {size} "{self._item_font.family()}";}}'
+            # 库默认 QTableView::item 左右 padding 为 16px，教师课表列宽较窄，改成 4px 让文字更宽敞
+            padding_qss = 'QTableView::item{padding-left:4px;padding-right:4px;}'
+            self._extra_qss = font_qss + padding_qss
+            self.setStyleSheet(self.styleSheet() + self._extra_qss)
+        except RuntimeError:
+            pass  # 控件已被销毁（主题切换回调晚于析构）
+
+
+# =====================================================================
 # 课程表预览表格
 # =====================================================================
 class TimeTableWidget(TableWidget):
@@ -543,6 +604,81 @@ class ClassMultiSelectionCombobox(MultiSelectionTreeComboBox):
 
     def checkedClasses(self)->list[Class]:
         return [lesson_info.classes[class_name] for class_name in self.checkedTexts()]
+
+class ClassTreeComboBox(TreeComboBox):
+    """班级树形下拉单选框：年级（分组）→ 班级（叶子），一次只能选一个班级。
+
+    与 :class:`ClassMultiSelectionCombobox` 共用数据源 ``cfg.grades_info``
+    （``{年级名: [班级名, ...]}``），区别只在单/多选：
+
+    * 年级只是分组，点击它只展开 / 收起，不会被当成选项选中；确实需要把年级
+      也作为选项时传 ``allowGrade=True``；
+    * 读取：:meth:`currentClass` 直接返回 :class:`Class` 对象；
+    * 回填：:meth:`setCurrentClass`（传 :class:`Class` 或班级名均可）；
+    * 年级 / 班级在设置页被改动后调用 :meth:`reload` 重建树，默认会尝试
+      恢复原先选中的班级。
+    """
+
+    def __init__(
+        self,
+        placeholderText: Optional[str] = None,
+        parent: Optional[QWidget] = None,
+        allowGrade: bool = False
+    ):
+        super().__init__(None, placeholderText, parent)
+        self.allowGrade=allowGrade
+        self.reload(keepCurrent=False)
+
+    # ------------------------------------------------------------------ 数据
+    def reload(self,keepCurrent:bool=True)->None:
+        """按当前 ``cfg.grades_info`` 重建树。
+
+        :param keepCurrent: 重建后是否恢复原先选中的项（默认 ``True``）
+        """
+        last=self.currentText()
+        self.clearItems()
+        self.addItems(cfg.grades_info.value)
+        if keepCurrent and last:
+            self.setCurrentText(last)
+        self._updateText()
+
+    # ------------------------------------------------------------------ 选择
+    def _onPopupItemClicked(self,node,clickedAllChildren:bool)->None:
+        # 年级不是班级：点它只展开 / 收起，不改变当前选择
+        if not self.allowGrade and node is not None and not node.isLeaf():
+            return
+        super()._onPopupItemClicked(node,clickedAllChildren)
+
+    def currentClass(self)->Optional[Class]:
+        """当前选中的班级；未选择或当前项是年级时返回 ``None``。"""
+        node=self.currentItem()
+        if node is None or not node.isLeaf():
+            return None
+        return lesson_info.classes.get(node.text())
+
+    def currentGrade(self)->Optional[Grade]:
+        """当前选中项所属的年级；未选择时返回 ``None``。"""
+        node=self.currentItem()
+        if node is None:
+            return None
+        # 选中班级时取其父节点（年级）；选中年级时它本身即年级
+        grade_node=node if not node.isLeaf() else node.parent()
+        if grade_node is None:
+            return None
+        return lesson_info.grades.get(grade_node.text())
+
+    def setCurrentClass(self,clas)->bool:
+        """按 :class:`Class` 对象或班级名设置当前项。
+
+        :return: 是否设置成功（班级不存在 / 不允许选年级却传入年级时为 ``False``）
+        """
+        name=clas.name if isinstance(clas,Class) else clas
+        if not name:
+            return False
+        node=self.findItem(name)
+        if node is None or (not self.allowGrade and not node.isLeaf()):
+            return False
+        return self.setCurrentItem(node)
 
 class TimeMultiSelectionCombobox(MultiSelectionTreeComboBox):
     """时间多选框：弹出“空课表”网格（列 = 星期，行 = 上午/下午第 x 节）。

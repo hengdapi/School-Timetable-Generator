@@ -18,7 +18,7 @@ from PySide6.QtGui import (
     QColor, QFont, QFontMetrics, QIcon, QKeySequence, QPainter, QPen, QShortcut
 )
 from PySide6.QtWidgets import (
-    QAbstractSpinBox, QApplication, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QAbstractSpinBox, QApplication, QHBoxLayout, QLabel, QLineEdit,
     QListWidgetItem, QPlainTextEdit, QTextEdit, QVBoxLayout, QWidget
 )
 from qfluentwidgets_pro import Action, FluentWidget, MenuAnimationType, RoundMenu
@@ -683,7 +683,7 @@ class TimelineEditor(FluentWidget):
                 for block in self.blocks:
                     item = QListWidgetItem(f"{block.name}\n{format_clock(block.start)} - {format_clock(block.end)}")
                     item.setData(Qt.UserRole, block)
-                    QListWidget.addItem(self.block_list, item)
+                    self.block_list.addItem(item)
             # 排序后选中项的行号可能变化，重新对齐
             if self.canvas.selected in self.blocks:
                 for row in range(self.block_list.count()):

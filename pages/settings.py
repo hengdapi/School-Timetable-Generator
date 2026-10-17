@@ -194,44 +194,105 @@ class GradeMsgbox(MessageBoxBase):
             return False
         return True
 
-class TeacherMaxnumMsgbox(MessageBoxBase):
-    def __init__(self, parent=None):
+class MergeLessonsMsgbox(MessageBoxBase):
+    def __init__(self,parent=None):
         super().__init__(parent)
-        subheader("设置老师同时上课最大数量",self,self.viewLayout,10)
-        self.teacher_combo=EditableComboBox()
-        self.teacher_combo.addItems(lesson_info.teacher_names)
-        self.teacher_combo.setCurrentIndex(-1)
-        self.teacher_combo.setPlaceholderText("请选择老师")
-        self.teacher_combo.setCompleter(QCompleter(lesson_info.teacher_names,self.teacher_combo))
-        self.teacher_combo.currentTextChanged.connect(self.show_cards)
-        add_widget(self.teacher_combo,self.viewLayout,0)
+        subheader("设置并课",self,self.viewLayout)
+        self.merged_lessons_list=RoundListWidget()
+        self.merged_lessons_list.currentItemChanged.connect(self.on_list_selected)
+        self.merged_lessons_list.clicked.connect(self.refresh_button_states)
+        self.viewLayout.addWidget(self.merged_lessons_list)
+        self.operation_layout=QGridLayout()
+        self.operation_layout.setColumnStretch(1,1)
+        self.operation_layout.addWidget(write("并课班级：",self,QVBoxLayout()),0,0)
+        self.operation_layout.addWidget(write("并课学科：",self,QVBoxLayout()),1,0)
+        self.class_combo=ClassMultiSelectionCombobox()
+        self.class_combo.setMaximumWidth(400)
+        self.operation_layout.addWidget(self.class_combo,0,1)
+        self.subject_combo=ComboBox()
+        self.subject_combo.setMaximumWidth(400)
+        self.subject_combo.addItems(lesson_info.subject_names)
+        self.operation_layout.addWidget(self.subject_combo,1,1)
+        self.viewLayout.addLayout(self.operation_layout)
 
-        self.max_num_cards:list[SettingCard]=[]
-        self.max_nums=cfg.teachers_max_num.value
+        self.yesButton.setText("添加并课")
+        self.yesButton.setIcon(FluentIcon.ADD)
+        self.editButton=PushButton("编辑并课")
+        self.editButton.setIcon(FluentIcon.EDIT)
+        self.editButton.clicked.connect(self.edit_lesson)
+        self.buttonLayout.insertWidget(1,self.editButton)
+        self.deleteButton=PushButton("删除并课")
+        self.deleteButton.setIcon(FluentIcon.DELETE)
+        self.deleteButton.clicked.connect(self.del_lesson)
+        self.buttonLayout.insertWidget(2,self.deleteButton)
+        self.cancelButton.setText("设置完成")
+        self.cancelButton.setIcon(FluentIcon.CLOSE)
+        self.refresh_lessons_list()
 
-        self.yesButton.setText("保存设置")
+    def refresh_button_states(self):
+        self.editButton.setEnabled(bool(self.merged_lessons_list.selectedItems()))
+        self.deleteButton.setEnabled(bool(self.merged_lessons_list.selectedItems()))
 
-    def show_cards(self):
-        teacher_name=self.teacher_combo.currentText()
-        if teacher_name not in lesson_info.teacher_names:
+    def refresh_lessons_list(self):
+        self.merged_lessons_list.clear()
+        self.merged_lessons_list.setFixedHeight(min(275,len(cfg.merged_lessons.value)*50))
+        for merged_lesson in cfg.merged_lessons.value:
+            item=QListWidgetItem(f"{", ".join(merged_lesson[1])} 的 {merged_lesson[0]} 学科并课")
+            item.setData(Qt.UserRole,merged_lesson)
+            self.merged_lessons_list.addItem(item)
+        self.refresh_button_states()
+
+    def check(self):
+        if len(self.class_combo.checkedClasses())<2:
+            Toast.error("请选择至少2个并课班级","",parent=self,duration=2000)
+            return False
+        if not self.subject_combo.currentText():
+            Toast.error("请选择并课学科","",parent=self,duration=2000)
+            return False
+        if (self.subject_combo.currentText(),self.class_combo.checkedTexts()) in cfg.merged_lessons.value:
+            Toast.error("该组并课设置已存在","",parent=self,duration=2000)
+            return False
+        for merged_lesson in cfg.merged_lessons.value:
+            if merged_lesson[0]==self.subject_combo.currentText() and set(merged_lesson[1])&set(self.class_combo.checkedTexts()):
+                Toast.error("并课设置冲突",f"与并课设置“{", ".join(merged_lesson[1])} 的 {merged_lesson[0]} 学科并课”冲突",parent=self,duration=-1)
+                return False
+        return True
+
+    def validate(self) -> bool:
+        if not self.check():
+            return False
+        cfg.merged_lessons.value.append((self.subject_combo.currentText(),self.class_combo.checkedTexts()))
+        save_settings()
+        self.refresh_lessons_list()
+        return False
+
+    def on_list_selected(self,item:QListWidgetItem):
+        if not item:
             return
-        teacher=lesson_info.teachers[teacher_name]
-        for card in self.max_num_cards:
-            card.deleteLater()
-        self.max_num_cards.clear()
-        for subject in teacher.subjects:
-            max_num_card=SettingCard("",f"{subject} 同时最大上课数量","")
-            max_num_card.hBoxLayout.addSpacing(50)
-            max_num_spinbox=SpinBox()
-            max_num_spinbox.setRange(1,len(lesson_info.classes))
-            max_num_spinbox.setValue(cfg.teachers_max_num.value[teacher_name][subject.name])
-            max_num_spinbox.valueChanged.connect(lambda value,teacher=teacher_name,subject=subject.name:self.update_value(value,teacher,subject))
-            add_widget(max_num_spinbox,max_num_card.hBoxLayout)
-            add_widget(max_num_card,self.viewLayout,0)
-            self.max_num_cards.append(max_num_card)
+        merged_lesson=item.data(Qt.UserRole)
+        self.subject_combo.setCurrentText(merged_lesson[0])
+        self.class_combo.setCheckedTexts(merged_lesson[1])
+        self.refresh_button_states()
 
-    def update_value(self,value,teacher_name,subject_name):
-        self.max_nums[teacher_name][subject_name]=value
+    def del_lesson(self):
+        if not self.merged_lessons_list.selectedItems():
+            return
+        selected_item=self.merged_lessons_list.selectedItems()[0]
+        cfg.merged_lessons.value.remove(selected_item.data(Qt.UserRole))
+        save_settings()
+        self.refresh_lessons_list()
+
+    def edit_lesson(self):
+        if not self.merged_lessons_list.selectedItems() or not self.check():
+            return
+        selected_item=self.merged_lessons_list.selectedItems()[0]
+        idx=cfg.merged_lessons.value.index(selected_item.data(Qt.UserRole))
+        cfg.merged_lessons.value.remove(selected_item.data(Qt.UserRole))
+        cfg.merged_lessons.value.insert(idx,(self.subject_combo.currentText(),self.class_combo.checkedTexts()))
+        save_settings()
+        self.refresh_lessons_list()
+        # 刷新后行号重新映射，按原位置重新选中，保持编辑焦点
+        self.merged_lessons_list.setCurrentRow(idx)
 
 class Settings(QFrame):
     def save_cfg(self,attr:str,value):
@@ -248,14 +309,11 @@ class Settings(QFrame):
         # 新增课次的起止时间默认为空，需要重新校验并提示
         self.refresh_time_warnings()
 
-    def set_teachers_max_num(self):
-        msgbox=TeacherMaxnumMsgbox(self)
-        if not msgbox.exec():
-            return
-        for teacher in lesson_info.teacher_lst:
-            for subject in teacher.subjects:
-                cfg.teachers_max_num.value[teacher.name][subject.name]=msgbox.max_nums[teacher.name][subject.name]
-        save_settings()
+    def merge_lessons(self):
+        MergeLessonsMsgbox(self).exec()
+        # 只重建并课信息：重新解析整个课程信息会换掉所有班级对象，
+        # 界面缓存的班级、已生成的课表、各规则引用的班级就全对不上了
+        lesson_info.parse_merged_lessons()
 
     def show_lessons_info(self):
         lessons_info=pd.DataFrame(cfg.lessons_info.value)
@@ -399,10 +457,9 @@ class Settings(QFrame):
     def show_rules(self):
         self.rule_list.clear()
         for rule in lesson_info.rules:
-            self.rule_list.addItem(str(rule))
-            # 获取刚添加的项并设置userData
-            item=self.rule_list.item(self.rule_list.count()-1)
+            item=QListWidgetItem(str(rule))
             item.setData(Qt.UserRole,rule)
+            self.rule_list.addItem(item)
 
     def on_drag_rules(self):
         new_rules=[]
@@ -795,11 +852,11 @@ class Settings(QFrame):
             add_widget(self.average_subjects_card,self.layout,0)
             self.forbid_noon_continuous_card=SwitchSettingCard(FluentIcon.CALENDAR,"允许跨上下午连堂","允许将连堂课排在上午最后一节和下午第一节",cfg.allow_noon_continuous)
             add_widget(self.forbid_noon_continuous_card,self.layout,0)
-            self.teachers_max_num_group=PushSettingCard("设置数量",FluentIcon.BOOK_SHELF,"老师同时最大上课数量","设置同一时间每个老师各个学科可以同时上课最大的数量（即最多允许该老师同时上几个班级该学科的课）")
-            add_widget(self.teachers_max_num_group,self.layout,0)
+            self.merge_lessons_group=PushSettingCard("设置",FluentIcon.BOOK_SHELF,"并课设置","设置哪些班级哪些学科要排在同一时间")
+            self.merge_lessons_group.clicked.connect(self.merge_lessons)
+            add_widget(self.merge_lessons_group,self.layout,0)
             self.max_tries_card=RangeSettingCard(cfg.max_tries,FluentIcon.CANCEL,"最大尝试次数","设置自动生成时同一时间最多尝试生成多少次，如果在尝试次数内无法生成出完全满足规则的课表，则会跳过该时间，并把剩余课程放在暂存区中")
             add_widget(self.max_tries_card,self.layout)
-            self.teachers_max_num_group.clicked.connect(self.set_teachers_max_num)
 
             add_widget(SeparatorWidget(orient=Qt.Horizontal),self.layout)
 
