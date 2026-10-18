@@ -8,14 +8,13 @@ from pages.ui_widgets import *
 
 
 class SaveTimetablePlan(MessageBoxBase):
-    def __init__(self, plan_time, parent=None):
+    def __init__(self, plan_time,curr_plan_name, parent=None):
         super().__init__(parent=parent)
         subheader("保存课程表方案",self,self.viewLayout)
         write("方案名称（若选择已有方案名称则覆盖该方案）：",self,self.viewLayout,0)
         self.name_input=EditableComboBox()
         self.name_input.addItems(cfg.timetable_plans.value.keys())
         self.name_input.setCompleter(QCompleter(cfg.timetable_plans.value.keys(),self.name_input))
-        self.name_input.setText(f"{plan_time} 保存的方案")
         self.name_input.textChanged.connect(self.on_input_name)
         add_widget(self.name_input,self.viewLayout)
         write("方案描述：",self,self.viewLayout,0)
@@ -24,6 +23,9 @@ class SaveTimetablePlan(MessageBoxBase):
         self.yesButton.setText("保存方案")
         self.yesButton.setIcon(FluentIcon.SAVE)
         self.cancelButton.setText("取消")
+        if curr_plan_name!="未保存" and curr_plan_name!="无":
+            self.name_input.setText(curr_plan_name)
+            self.on_input_name()
         
     def validate(self) -> bool:
         if not self.name_input.text():
@@ -126,6 +128,11 @@ class SelectCustomClassesMsgbox(MessageBoxBase):
             write("请选择为哪些班级生成课表：",self,self.viewLayout,0)
             self.yesButton.setText("生成课表")
             self.yesButton.setIcon(FluentIcon.BRUSH)
+        elif mode=="check":
+            subheader("自定义检查部分课表",self,self.viewLayout)
+            write("请选择要检查哪些班级的课表：",self,self.viewLayout,0)
+            self.yesButton.setText("检查冲突")
+            self.yesButton.setIcon(FluentIcon.SEARCH)
         else:
             subheader("自定义清空部分课表",self,self.viewLayout)
             write("请选择清空哪些班级的课表：",self,self.viewLayout,0)
@@ -160,12 +167,21 @@ class ChooseLessonMsgbox(MessageBoxBase):
         self.delegate.sizeHint=lambda option,idx:QSize(option.rect.width(),48)
         self.class_list.setItemDelegate(self.delegate)
         self.class_list.setFixedHeight(min(len(lessons)*50,300))
-        self.class_list.itemDoubleClicked.connect(self.validate)
+        self.class_list.itemDoubleClicked.connect(self.jump_to_lesson)
         for clas,subject,time in lessons:
             self.class_list.addItem(f"{clas}  {subject}  {time}")
         add_widget(self.class_list,self.viewLayout,0)
         self.yesButton.setText("跳转")
         self.yesButton.setIcon(FluentIcon.SEND)
+
+    def jump_to_lesson(self,item):
+        """双击某节课：记录所选课程并关闭对话框（由调用方跳转过去）"""
+        if item is None:
+            return
+        selected_row=self.class_list.indexFromItem(item).row()
+        if 0<=selected_row<len(self.lessons):
+            self.selected_lesson=self.lessons[selected_row]
+            self.accept()
 
     def validate(self) -> bool:
         if not self.class_list.selectedItems():
@@ -174,4 +190,70 @@ class ChooseLessonMsgbox(MessageBoxBase):
         selected_row=self.class_list.indexFromItem(self.class_list.selectedItems()[0]).row()
         if 0<=selected_row<len(self.lessons):
             self.selected_lesson=self.lessons[selected_row]
+        return True
+
+class CheckConflictMsgbox(MessageBoxBase):
+    """一键检查冲突的结果对话框，双击或点击"跳转"可跳到冲突位置"""
+
+    def __init__(self,conflicts:list,parent=None,scope_name:str="",classes:list|None=None):
+        """
+        :param conflicts: 冲突列表，元素为 core.timetable_core.Conflict
+        :param parent: 父窗口
+        :param scope_name: 检查范围的名称（如"高一1班"），显示在标题中
+        :param classes: 实际检查的班级列表，用于统计未排课程数；None 表示全部班级
+        """
+        super().__init__(parent=parent)
+        self.conflicts=conflicts
+        self.selected_conflict=None  # 用户选择要跳转的冲突
+        subheader(f"检查冲突（{scope_name}）" if scope_name else "检查冲突",self,self.viewLayout)
+        if classes is None:
+            classes=lesson_info.class_lst
+        left_num=sum(len(clas.left_subjects) for clas in classes)
+        if conflicts:
+            write(f"共发现 {len(conflicts)} 处冲突，双击可跳转到对应班级的对应位置：",self,self.viewLayout,0)
+        else:
+            write("未发现课程冲突或规则冲突",self,self.viewLayout,0)
+        if left_num:
+            write(f"注意：当前还有 {left_num} 节课没有排入课表（在暂存区中）",self,self.viewLayout,0)
+        self.conflict_tree=TreeWidget()
+        self.conflict_tree.setHeaderHidden(True)
+        groups={}
+        for conflict in conflicts:
+            groups.setdefault(conflict.category,[]).append(conflict)
+        for category,items in groups.items():
+            top_item=QTreeWidgetItem()
+            top_item.setText(0,f"{category}（{len(items)} 处）")
+            for conflict in items:
+                child_item=QTreeWidgetItem()
+                child_item.setText(0,conflict.message)
+                child_item.setData(0,Qt.UserRole,conflict)
+                top_item.addChild(child_item)
+            self.conflict_tree.addTopLevelItem(top_item)
+        self.conflict_tree.expandAll()
+        self.conflict_tree.itemDoubleClicked.connect(self.jump_to_conflict)
+        if conflicts:
+            self.conflict_tree.setFixedSize(820,min(170+len(conflicts)*26,470))
+            add_widget(self.conflict_tree,self.viewLayout,0)
+        if conflicts:
+            self.yesButton.setText("跳转到所选冲突")
+            self.yesButton.setIcon(FluentIcon.SEND)
+        # else:
+        #     self.yesButton.setText("知道了")
+        #     self.yesButton.setIcon(FluentIcon.COMPLETED)
+
+    def jump_to_conflict(self,item):
+        """双击某处冲突：记录所选冲突并关闭对话框（由调用方跳转过去）"""
+        if item is None or item.parent() is None:
+            return  # 双击的是分组标题，不处理
+        self.selected_conflict=item.data(0,Qt.UserRole)
+        self.accept()
+
+    def validate(self) -> bool:
+        if not self.conflicts:
+            return True  # 没有冲突，直接关闭
+        item=self.conflict_tree.currentItem()
+        if item is None or item.parent() is None:  # 没有选中具体冲突（或选中的是分组）
+            Toast.error("请先选择一处冲突","",duration=2000,parent=self)
+            return False
+        self.selected_conflict=item.data(0,Qt.UserRole)
         return True

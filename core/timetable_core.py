@@ -229,6 +229,272 @@ def store_merged_lessons(clas:Class,time:Time,subjects:list[Subject])->list[Clas
     return adjusted
 
 
+# ==================== 一键检查冲突 ====================
+class Conflict:
+    """一处课程冲突或规则冲突"""
+
+    def __init__(self,category:str,clas:Class,time:Time,message:str):
+        self.category=category  # 冲突类别：课程冲突 / 规则冲突
+        self.clas=clas          # 冲突所在班级（用于跳转）
+        self.time=time          # 冲突所在时间（用于跳转）
+        self.message=message    # 冲突描述
+
+    @property
+    def sort_key(self)->tuple:
+        return (self.category,self.clas.name,self.time.day,self.time.lesson)
+
+def _is_merged_together(clas1:Class,clas2:Class,subject:Subject)->bool:
+    """两个班级是否在该学科上并课（并课班级在同一时间上课是正常的）"""
+    for merged_classes in lesson_info.merged_lessons.get(subject,[]):
+        if clas1 in merged_classes and clas2 in merged_classes:
+            return True
+    return False
+
+def _teacher_time_entries(teacher:Teacher,time:Time)->list[tuple[Class,Subject,set[str]]]:
+    """获取某教师在某个时间位置上的全部课程，及每节课占用的周次"""
+    entries:list[tuple[Class,Subject,set[str]]]=[]
+    for variant,weeks in ((time.sin_week,{"sin"}),(time.dou_week,{"dou"}),(time.all_week,{"sin","dou"})):
+        for clas,subject in teacher.timetable.get(variant,[]):
+            entries.append((clas,subject,weeks))
+    return entries
+
+def _count_subject_at(subject:Subject,time:Time)->int:
+    """统计某个时间排了某门课的班级数（一组并课算一节课）"""
+    classes=list(subject.timetable.get(time,[]))
+    count=0
+    for merged_classes in lesson_info.merged_lessons.get(subject,[]):
+        if any(clas in classes for clas in merged_classes):
+            count+=1
+            classes=[clas for clas in classes if clas not in merged_classes]
+    return count+len(classes)
+
+def _check_teacher_conflicts(classes:list[Class])->list[Conflict]:
+    """检查同一教师在同一时间有多节课的冲突（并课课程除外）
+
+    只报告涉及检查范围内班级的冲突（与范围外班级的冲突也会列出，便于对照），
+    冲突挂到范围内第一个涉及的班级上。
+    """
+    class_set=set(classes)
+    conflicts:list[Conflict]=[]
+    for teacher in lesson_info.teacher_lst:
+        for day in range(1,6):
+            for lesson in range(1,cfg.day_class_num+1):
+                time=Time(day,lesson)
+                entries=_teacher_time_entries(teacher,time)
+                if len(entries)<2:
+                    continue
+                # 找出与其他课在周次上冲突的课（并课班级的同一门课不算冲突）
+                conflicting:list[tuple[Class,Subject]]=[]
+                for clas1,subject1,weeks1 in entries:
+                    for clas2,subject2,weeks2 in entries:
+                        if (clas1,subject1)==(clas2,subject2) or not (weeks1&weeks2):
+                            continue
+                        if subject1==subject2 and _is_merged_together(clas1,clas2,subject1):
+                            continue
+                        if (clas1,subject1) not in conflicting:
+                            conflicting.append((clas1,subject1))
+                in_scope=[entry for entry in conflicting if entry[0] in class_set]
+                if in_scope:
+                    lessons="、".join([f"{clas} 的 {subject}" for clas,subject in conflicting])
+                    conflicts.append(Conflict("课程冲突",in_scope[0][0],time,
+                        f"教师冲突：{teacher} 老师在 {time} 同时有 {lessons}"))
+    return conflicts
+
+def _check_cell_conflicts(classes:list[Class])->list[Conflict]:
+    """检查同一时间排了多节课、单双周课程没有成对安排等冲突"""
+    conflicts:list[Conflict]=[]
+    for clas in classes:
+        for time,subjects in clas.timetable.items():
+            if len(subjects)>1 and not (len(subjects)==2 and subjects[0] in clas.half_subjects and subjects[1] in clas.half_subjects):
+                conflicts.append(Conflict("课程冲突",clas,time,
+                    f"课程冲突：{time} 同时排了 {'、'.join([str(s) for s in subjects])}（非单双周课程不能排在同一时间）"))
+        # 单双周课程要成对安排（两周各上一次），不能多次只排在单周
+        for subject in clas.half_subjects:
+            total=clas.count_subject(subject)
+            if total<2:
+                continue
+            sin_num=0
+            first_time=None
+            for time,subjects in clas.timetable.items():
+                if subject not in subjects:
+                    continue
+                if first_time is None:
+                    first_time=time
+                if len(subjects)==1 or subjects[0] is subject:
+                    sin_num+=1  # 单独排的一节在单周；与另一门单双周课配对时，排在前面的一节也在单周
+            if sin_num>(total+1)//2:
+                conflicts.append(Conflict("规则冲突",clas,first_time or Time(1,1),
+                    f"规则冲突：{subject} 是单双周课程，但 {clas} 有 {sin_num} 节课排在单周（共 {total} 节，应单双周交替安排）"))
+    return conflicts
+
+def _check_rule_conflicts(classes:list[Class])->list[Conflict]:
+    """对照已配置的规则，检查课表中违反规则的地方"""
+    class_set=set(classes)
+    conflicts:list[Conflict]=[]
+    all_times=[Time(day,lesson) for day in range(1,6) for lesson in range(1,cfg.day_class_num+1)]
+    for clas in classes:
+        if clas.empty:
+            continue  # 整张课表都是空的，没有什么可冲突的
+        clas_rules=[rule for rule in lesson_info.rules if clas in rule.scope]
+        # ---- 与位置相关的规则 ----
+        for time in all_times:
+            subjects=clas.get_lessons(time)
+            for rule in clas_rules:
+                if isinstance(rule,SetTimeRule):
+                    if time in rule.times and rule.subject not in subjects:
+                        detail=f"，实际排了 {'、'.join([str(s) for s in subjects])}" if subjects else "，但该位置没有排课"
+                        conflicts.append(Conflict("规则冲突",clas,time,f"规则冲突：{time} 必须排 {rule.subject}{detail}"))
+                elif isinstance(rule,AvoidTimeRule):
+                    if time in rule.times:
+                        for subject in subjects:
+                            if subject in rule.subjects:
+                                conflicts.append(Conflict("规则冲突",clas,time,f"规则冲突：{subject} 不能排在 {time}"))
+                elif isinstance(rule,SetNumRule):
+                    for subject in subjects:
+                        if subject in rule.subjects:
+                            num=_count_subject_at(subject,time)
+                            if num>rule.number:
+                                conflicts.append(Conflict("规则冲突",clas,time,
+                                    f"规则冲突：{time} 有 {num} 个班级排 {subject}（规则要求同一时间最多排 {rule.number} 节）"))
+                elif isinstance(rule,AvoidSubjectRule):
+                    seen=set()
+                    for subject in subjects:
+                        others=rule.subjectsB if subject in rule.subjectsA else rule.subjectsA if subject in rule.subjectsB else []
+                        for other in others:
+                            if other is subject or not other.timetable.get(time):
+                                continue
+                            pair=frozenset({subject.name,other.name})
+                            if pair in seen:
+                                continue
+                            seen.add(pair)
+                            classes="、".join([str(c) for c in other.timetable.get(time)])
+                            conflicts.append(Conflict("规则冲突",clas,time,
+                                f"规则冲突：{subject} 与 {other} 不能排在同一时间，{time} {clas} 排了 {subject}，{classes} 排了 {other}"))
+                elif isinstance(rule,AvoidTeacherRule):
+                    for subject in subjects:
+                        teacher=clas.get_teacher(subject)
+                        others=rule.teachersB if teacher in rule.teachersA else rule.teachersA if teacher in rule.teachersB else []
+                        for teacher2 in others:
+                            if teacher2 is teacher:
+                                continue
+                            entries=_teacher_time_entries(teacher2,time)
+                            if entries:
+                                detail="、".join([f"{c} 的 {s}" for c,s,_ in entries])
+                                conflicts.append(Conflict("规则冲突",clas,time,
+                                    f"规则冲突：{teacher} 老师与 {teacher2} 老师不能在同一时间排课，{time} {clas} 的 {subject} 由 {teacher} 授课，{teacher2} 同时有 {detail}"))
+                elif isinstance(rule,TeacherAvoidTimeRule):
+                    if time in rule.times:
+                        for subject in subjects:
+                            teacher=clas.get_teacher(subject)
+                            if teacher in rule.teachers:
+                                conflicts.append(Conflict("规则冲突",clas,time,
+                                    f"规则冲突：{teacher} 老师不能在 {time} 排课，但 {clas} 在该时间有 {subject} 课"))
+        # ---- 与整个班级课表相关的规则 ----
+        for rule in clas_rules:
+            if isinstance(rule,EverydaySubjectRule):
+                for subject in rule.subjects:
+                    for day in range(1,6):
+                        if clas.count_subject(subject,Time(day,1),Time(day,cfg.day_class_num))==0:
+                            conflicts.append(Conflict("规则冲突",clas,Time(day,1),
+                                f"规则冲突：{subject} 每天至少排一次课，但 {clas} {Time(day,1).to_str(True,False)} 没有排"))
+            elif isinstance(rule,SetContinueRule):
+                for subject in rule.subjects:
+                    have=clas.get_continue_times(subject)
+                    if have<rule.number:
+                        conflicts.append(Conflict("规则冲突",clas,Time(1,1),
+                            f"规则冲突：{subject} 每周需要连堂 {rule.number} 次，但 {clas} 只有 {have} 次"))
+    # ---- 跨班级的规则 ----
+    for rule in lesson_info.rules:
+        if not rule.scope:
+            continue
+        if isinstance(rule,TeacherSetTimeRule):
+            in_scope=[clas for clas in rule.scope if clas in class_set]
+            if not in_scope:
+                continue  # 检查范围内没有该规则涉及的班级
+            for teacher in rule.teachers:
+                for rule_time in rule.times:
+                    if not any(clas.get_teacher(subject)==teacher
+                               for clas in rule.scope for subject in clas.get_lessons(rule_time)):
+                        conflicts.append(Conflict("规则冲突",in_scope[0],rule_time,
+                            f"规则冲突：{teacher} 老师必须在 {rule_time} 排课，但该时间没有排课"))
+        elif isinstance(rule,SubjectOrderRule):
+            # 只比较已经排完的班级（还有课在暂存区的班级进度不完整，与调课检查的逻辑保持一致）
+            scope=[clas for clas in rule.scope if not clas.left_subjects]
+            if not any(clas in class_set for clas in scope):
+                continue  # 检查范围内没有该规则涉及的班级
+            for subject in rule.subjects:
+                if len(scope)<2:
+                    continue
+                counts={clas.name:0 for clas in scope}
+                time=Time(1,1)
+                while True:
+                    for clas in scope:
+                        counts[clas.name]+=clas.get_lessons(time).count(subject)
+                    if max(counts.values())-min(counts.values())>1:
+                        detail="，".join([f"{name} {num} 个课时" for name,num in counts.items()])
+                        worst=max(scope,key=lambda c:counts[c.name])
+                        attach=worst if worst in class_set else next(c for c in scope if c in class_set)
+                        conflicts.append(Conflict("规则冲突",attach,time,
+                            f"规则冲突：{subject} 的教学进度在 {time} 不一致（{detail}）"))
+                        break
+                    time=time.next
+                    if time==Time(1,1):
+                        break
+    return conflicts
+
+def _check_merged_sync(classes:list[Class])->list[Conflict]:
+    """检查并课班级是否都在同一时间上这门课
+
+    正确的判定是：每个并课班级排这门课的「时间集合」要完全一致。
+    一门课一周排多节（如体育一周两节）时，只要所有并课班级都在同样的时间集合上，
+    就视为同步——旧实现只统计“总共占了多少个不同时间”，会误报未同步。
+    """
+    class_set=set(classes)
+    conflicts:list[Conflict]=[]
+    for subject,groups in lesson_info.merged_lessons.items():
+        for group in groups:
+            # 没有这门课的班级、整张课表还是空的班级不参与并课
+            group=[clas for clas in group if subject.name in clas.teachers and not clas.empty]
+            if len(group)<2:
+                continue
+            if not any(clas in class_set for clas in group):
+                continue  # 检查范围内没有该并课小组的班级
+            # 每个并课班级排这门课的时间集合
+            placement:dict[Class,set[Time]]={}
+            for clas in group:
+                placement[clas]={time for time,subjects in clas.timetable.items() if subject in subjects}
+            reference=set().union(*placement.values())
+            if not reference:
+                continue  # 都还没有排这门课
+            for clas in group:
+                missing=reference-placement[clas]
+                if not missing:
+                    continue  # 该班排这门课的时间与并课小组一致
+                first_time=min(missing)
+                others="、".join([str(c) for c in group if c is not clas and first_time in placement[c]])
+                attach=clas if clas in class_set else next(c for c in group if c in class_set)
+                details="；".join(f"{t} 未排" for t in sorted(missing))
+                conflicts.append(Conflict("课程冲突",attach,first_time,
+                    f"并课未同步：{clas} 的 {subject} 在 {details}，但并课班级 {others} 在这些时间排了 {subject}"))
+    return conflicts
+
+def check_all_conflicts(classes:list[Class]|None=None)->list[Conflict]:
+    """一键检查课表，返回全部课程冲突与规则冲突
+
+    :param classes: 要检查的班级列表；None 表示检查全部班级
+    :return: 冲突列表（按类别、班级、时间排序）
+    """
+    if classes is None:
+        classes=lesson_info.class_lst
+    conflicts:list[Conflict]=[]
+    conflicts+=_check_teacher_conflicts(classes)
+    conflicts+=_check_cell_conflicts(classes)
+    conflicts+=_check_rule_conflicts(classes)
+    conflicts+=_check_merged_sync(classes)
+    conflicts.sort(key=lambda conflict:conflict.sort_key)
+    return conflicts
+
+
 # ==================== 撤销 / 重做 ====================
 def diff_timetables(state1:dict,state2:dict)->dict[str,set[Time]]:
     """对比两份课表快照，返回每个班级中发生变化的位置"""

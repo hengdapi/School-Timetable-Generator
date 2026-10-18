@@ -155,7 +155,23 @@ class Generate(QFrame):
         self.save_menu.addAction(Action(QtGui.QIcon("images/cses.png"),"导出CSES课表v1",triggered=lambda :self.save_timetable("cses_v1"),toolTip="可直接导入Class Island、Class Widgets等班级大屏课表软件"))
         self.save_menu.addAction(Action(QtGui.QIcon("images/cses.png"),"导出CSES课表v2",triggered=lambda :self.save_timetable("cses"),toolTip="当前部分软件尚未支持，如课表软件提示导入失败请尝试v1版本导入"))
         self.save_button.setMenu(self.save_menu)
-        add_widget(self.save_button,self.operation_layout)
+        add_widget(self.save_button,self.operation_layout,0)
+
+        # 检查冲突按钮（与生成/清空一致，支持选择检查范围）
+        self.check_conflict_button=DropDownPushButton()
+        self.check_conflict_button.setText("检查冲突")
+        self.check_conflict_button.setIcon(FluentIcon.SEARCH)
+        self.check_conflict_button.setFixedSize(160,40)
+        self.check_conflict_menu=RoundMenu()
+        self.check_school_action=Action("检查全校课表",triggered=lambda :self.check_conflicts("school"))
+        self.check_grade_action=Action("检查本年段课表",triggered=lambda :self.check_conflicts("grade"))
+        self.check_class_action=Action("检查本班课表",triggered=lambda :self.check_conflicts("class"))
+        self.check_custom_action=Action("检查自定义部分课表",triggered=lambda :self.check_conflicts("custom"))
+        self.check_grade_action.setEnabled(False)
+        self.check_class_action.setEnabled(False)
+        self.check_conflict_menu.addActions([self.check_school_action,self.check_grade_action,self.check_class_action,self.check_custom_action])
+        self.check_conflict_button.setMenu(self.check_conflict_menu)
+        add_widget(self.check_conflict_button,self.operation_layout)
 
         # 撤销 / 重做
         self.undo_button=TransparentToolButton()
@@ -622,6 +638,7 @@ class Generate(QFrame):
             # 禁用生成按钮防止重复点击
             self.generate_button.setEnabled(False)
             self.load_plan_action.setEnabled(False)
+            self.check_conflict_button.setEnabled(False)
             self.progress_toast.show()
             self.progress_bar.setValue(0)
             # 任务栏图标上同步显示进度（绑定主窗口，先滚动，拿到具体进度后切百分比）
@@ -673,12 +690,47 @@ class Generate(QFrame):
         Toast.success("自动排课完成","跳过了以下课程：\n"+"\n".join([f"{clas} {time}" for clas,time in skipped_lessons]) if skipped_lessons else "没有跳过课程",duration=-1 if skipped_lessons else 4000,parent=self)
         lesson_info.saved=False
         self.generate_button.setEnabled(True)
+        self.check_conflict_button.setEnabled(True)
         self.refresh_plan_actions()
         self.curr_plan.setText("当前方案：未保存")
         self.progress_toast.hide()
         self.taskbar_progress.clear()
         self.refresh_object_tree()
         self.refresh_timetable()
+
+    def check_conflicts(self,check_object):
+        """一键检查课表冲突，支持选择检查范围，可跳转到冲突位置"""
+        try:
+            if check_object=="school":
+                logging.info("检查全校课表冲突")
+                classes=lesson_info.class_lst
+                scope_name="全校"
+            elif check_object=="grade":
+                logging.info("检查本年段课表冲突")
+                classes=self.preview_grade.classes
+                scope_name=self.preview_grade.name
+            elif check_object=="class":
+                logging.info("检查本班课表冲突")
+                classes=[self.preview_object]
+                scope_name=str(self.preview_object)
+            else:
+                logging.info("自定义检查部分课表冲突")
+                custom_msgbox=SelectCustomClassesMsgbox("check",self)
+                if not custom_msgbox.exec():
+                    return
+                classes=custom_msgbox.class_combo.checkedClasses()
+                scope_name="自定义部分班级"
+            conflicts=check_all_conflicts(classes)
+            logging.info(f"冲突检查完成，共发现 {len(conflicts)} 处冲突")
+            dialog=CheckConflictMsgbox(conflicts,self,scope_name,classes)
+            if dialog.exec() and dialog.selected_conflict is not None:
+                conflict=dialog.selected_conflict
+                logging.info(f"跳转到冲突位置：{conflict.clas} {conflict.time}")
+                self.goto_class_lesson(conflict.clas,conflict.time)
+        except Exception as error:
+            e=traceback.format_exc()
+            logging.critical(f"检查冲突出错：{e}")
+            show_error(self,error)
 
     def show_check_result(self,source_subjects:list[Subject],source_time:Time|None,exchange:bool=True):
         clas=self.preview_object
@@ -1155,6 +1207,8 @@ class Generate(QFrame):
             self.generate_class_action.setEnabled(False)
             self.clear_grade_action.setEnabled(False)
             self.clear_class_action.setEnabled(False)
+            self.check_grade_action.setEnabled(False)
+            self.check_class_action.setEnabled(False)
             if object_item.text(0)=="班级总表":
                 self.preview_mode="total_classes"
                 self.timetable_preview.setDragEnabled(False)
@@ -1192,12 +1246,15 @@ class Generate(QFrame):
                 self.preview_grade=lesson_info.grades[object_item.data(0,Qt.UserRole)]
                 self.generate_grade_action.setEnabled(True)
                 self.clear_grade_action.setEnabled(True)
+                self.check_grade_action.setEnabled(True)
             elif object_item.parent().parent() is not None and object_item.parent().parent().data(0,Qt.UserRole) =="班级课表":
                 self.preview_mode="class"
                 self.generate_grade_action.setEnabled(True)
                 self.generate_class_action.setEnabled(True)
                 self.clear_grade_action.setEnabled(True)
                 self.clear_class_action.setEnabled(True)
+                self.check_grade_action.setEnabled(True)
+                self.check_class_action.setEnabled(True)
                 self.timetable_preview.setDragEnabled(True)
                 self.preview_object=lesson_info.classes[object_item.data(0,Qt.UserRole)]
                 self.preview_grade=self.preview_object.grade
@@ -1303,7 +1360,7 @@ class Generate(QFrame):
         try:
             logging.info("保存课程表方案")
             plan_time=time.strftime("%Y-%m-%d %H:%M:%S",time.localtime())
-            save_plan_msg=SaveTimetablePlan(plan_time,self)
+            save_plan_msg=SaveTimetablePlan(plan_time,self.curr_plan.text()[5:],self)
             if not save_plan_msg.exec():
                 logging.info("用户取消保存")
                 return
@@ -1383,4 +1440,5 @@ class Generate(QFrame):
             logging.info("用户确认强制调课")
             for lesson in self.conflict_lessons[target_time]:
                 lesson[0].remove_lesson(lesson[1])
+            self.refresh_object_tree()
             return True

@@ -78,6 +78,7 @@ class RuleMessageBox(MessageBoxBase):
                 string_layout.addWidget(name_label,i,0,alignment=Qt.AlignmentFlag.AlignLeft)
                 if rule_class.args[string_name].type=="multi":
                     input_widget=MultiSelectComboBox()
+                    input_widget.setChipsMode(True)
                 elif rule_class.args[string_name].type=="single":
                     input_widget=EditableComboBox()
                 elif rule_class.args[string_name].type=="int":
@@ -461,6 +462,22 @@ class Settings(QFrame):
             item.setData(Qt.UserRole,rule)
             self.rule_list.addItem(item)
 
+    def show_rule_menu(self,pos):
+        """规则列表右键菜单：编辑、删除"""
+        item=self.rule_list.itemAt(pos)
+        if not item:
+            return
+        self.rule_list.setCurrentItem(item)
+        self.enable_rule_button()
+        menu=RoundMenu(parent=self)
+        edit_action=Action(FluentIcon.EDIT,"编辑")
+        edit_action.triggered.connect(self.edit_rule)
+        menu.addAction(edit_action)
+        delete_action=Action(FluentIcon.DELETE,"删除")
+        delete_action.triggered.connect(self.del_rule)
+        menu.addAction(delete_action)
+        menu.exec(self.rule_list.viewport().mapToGlobal(pos),aniType=MenuAnimationType.DROP_DOWN)
+
     def on_drag_rules(self):
         new_rules=[]
         for i in range(self.rule_list.count()):
@@ -599,6 +616,22 @@ class Settings(QFrame):
         self.del_grade_button.setEnabled(bool(self.grade_table.selectedItems()))
         self.grade_up_button.setEnabled(bool(self.grade_table.selectedItems()) and idx!=0)
         self.grade_down_button.setEnabled(bool(self.grade_table.selectedItems()) and idx!=len(cfg.grades_info.value)-1)
+
+    def show_grade_menu(self,pos):
+        """年段表格右键菜单：编辑、删除"""
+        item=self.grade_table.itemAt(pos)
+        if not item:
+            return
+        self.grade_table.setCurrentItem(item)
+        self.refresh_grade_button()
+        menu=RoundMenu(parent=self)
+        edit_action=Action(FluentIcon.EDIT,"编辑")
+        edit_action.triggered.connect(self.edit_grade)
+        menu.addAction(edit_action)
+        delete_action=Action(FluentIcon.DELETE,"删除")
+        delete_action.triggered.connect(self.del_grade)
+        menu.addAction(delete_action)
+        menu.exec(self.grade_table.viewport().mapToGlobal(pos),aniType=MenuAnimationType.DROP_DOWN)
 
     def show_grades(self):
         self.grade_table.setRowCount(len(cfg.grades_info.value))
@@ -805,6 +838,9 @@ class Settings(QFrame):
             self.grade_table.verticalHeader().hide()
             self.grade_table.setEditTriggers(TableWidget.NoEditTriggers)
             self.grade_table.clicked.connect(self.refresh_grade_button)
+            self.grade_table.itemDoubleClicked.connect(self.edit_grade)
+            self.grade_table.setContextMenuPolicy(Qt.CustomContextMenu)
+            self.grade_table.customContextMenuRequested.connect(self.show_grade_menu)
             self.show_grades()
             add_widget(self.grade_table,self.layout)
 
@@ -841,6 +877,9 @@ class Settings(QFrame):
             self.rule_list.setDropIndicatorShown(True)
             self.rule_list.setDragDropMode(QAbstractItemView.InternalMove)
             self.rule_list.itemClicked.connect(self.enable_rule_button)
+            self.rule_list.itemDoubleClicked.connect(self.edit_rule)
+            self.rule_list.setContextMenuPolicy(Qt.CustomContextMenu)
+            self.rule_list.customContextMenuRequested.connect(self.show_rule_menu)
             self.rule_list.model().rowsMoved.connect(self.on_drag_rules)
             self.show_rules()
             add_widget(self.rule_list,self.layout)

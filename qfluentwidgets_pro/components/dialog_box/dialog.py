@@ -1,12 +1,12 @@
 # coding:utf-8
 from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
 
 from ...common.auto_wrap import TextWrap
 from ...common.style_sheet import FluentStyleSheet
 from ...qframelesswindow import FramelessDialog
-from ..widgets.button import PrimaryPushButton
+from ..widgets.button import PrimaryPushButton, PushButton
 from ..widgets.label import BodyLabel
 from .mask_dialog_base import MaskDialogBase
 
@@ -27,7 +27,8 @@ class Ui_MessageBox:
 
         self.buttonGroup = QFrame(parent)
         self.yesButton = PrimaryPushButton(self.tr("OK"), self.buttonGroup)
-        self.cancelButton = QPushButton(self.tr("Cancel"), self.buttonGroup)
+        # 用 Fluent 的 PushButton 而不是原生 QPushButton，这样 cancelButton.setIcon 可以直接传 FluentIcon
+        self.cancelButton = PushButton(self.tr("Cancel"), self.buttonGroup)
 
         self.vBoxLayout = QVBoxLayout(parent)
         self.textLayout = QVBoxLayout()
