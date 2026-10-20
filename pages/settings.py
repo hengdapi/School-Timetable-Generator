@@ -48,7 +48,7 @@ class RuleMessageBox(MessageBoxBase):
 
     def show_rule_strings(self):
         rule_class:Rule=self.rule_combo.currentData()[0]
-        name=self.rule_combo.currentData()[0].text
+        name=rule_class.text
         for layout in self.string_layouts:
             while layout.count():
                 item=layout.takeAt(0)
@@ -97,7 +97,7 @@ class RuleMessageBox(MessageBoxBase):
                     input_widget.addItems(items)
                     if isinstance(input_widget,EditableComboBox):
                         input_widget.setCompleter(QCompleter(items,input_widget))
-                if self.edit:
+                if self.edit and hasattr(self.curr_rule,string_name):
                     if isinstance(input_widget,EditableComboBox):
                         input_widget.setCurrentText(str(getattr(self.curr_rule,string_name)))
                     elif isinstance(input_widget,MultiSelectComboBox):

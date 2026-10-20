@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import os.path
 import sys
 import webbrowser
 from functools import total_ordering
@@ -37,6 +38,10 @@ logging.info(f"程序开始启动")
 appdata=os.path.join(os.environ["APPDATA"],"School-Timetable-Generator")
 gitcode_url="https://gitcode.com/hengdapi/School-Timetable-Generator"
 github_url="https://github.com/hengdapi/School-Timetable-Generator"
+
+if os.path.exists("update.exe"):
+    os.remove("update.exe")
+    logging.info("删除旧版本更新程序")
 
 class CheckUpdateThread(QThread):
     """检查更新线程：网络请求在子线程执行，避免阻塞 UI"""

@@ -1371,7 +1371,7 @@ class Generate(QFrame):
             lesson_info.saved=True
             self.refresh_plan_actions()
             logging.info("课程表方案保存成功")
-            Toast.success("课程表方案保存成功！","",parent=self,duration=3000)
+            Toast.success("课程表方案保存成功！",f"成功保存方案：{plan_name}",parent=self,duration=3000)
         except Exception as error:
             e=traceback.format_exc()
             logging.critical(f"保存课程表方案出错：\n{e}")
@@ -1425,7 +1425,7 @@ class Generate(QFrame):
             delete_plans(plan_names)
             self.refresh_plan_actions()
             logging.info("课程表方案删除成功")
-            Toast.success("课程表方案删除成功！","",parent=self,duration=3000)
+            Toast.success("课程表方案删除成功！",f"成功删除方案：{', '.join(plan_names)}",parent=self,duration=3000)
         except Exception as error:
             e=traceback.format_exc()
             logging.critical(f"删除课程表方案出错：\n{e}")
