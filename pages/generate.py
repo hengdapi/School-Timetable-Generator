@@ -196,19 +196,13 @@ class Generate(QFrame):
         self.refresh_history_actions()
 
         add_widget(SeparatorWidget(orient=Qt.Vertical),self.operation_layout)
-        self.manage_plan_button=DropDownPushButton()
+        self.manage_plan_button=PushButton()
         self.manage_plan_button.setText("管理课程表方案")
-        self.manage_plan_button.setToolTip("管理已保存的课程表方案")
-        self.manage_plan_button.setIcon(FluentIcon.DICTIONARY)
-        self.manage_plan_button.setFixedHeight(40)
-        self.manage_plan_menu=RoundMenu()
-        self.save_plan_action=Action(FluentIcon.SAVE,"保存当前方案",triggered=self.save_plan,toolTip="保存当前的课程表方案，用于保存当前正在编排的课程表，以便下次加载在当前方案下继续排课")
-        self.load_plan_action=Action(FluentIcon.HISTORY,"加载方案",triggered=self.load_plan,toolTip="加载曾经保存的课程表方案，用于在曾经未排好的课程表基础上继续排课")
-        self.del_plan_action=Action(FluentIcon.DELETE,"删除方案",triggered=self.del_plan,toolTip="删除已保存的课程表方案")
-        self.manage_plan_menu.addActions([self.save_plan_action,self.load_plan_action,self.del_plan_action])
-        self.manage_plan_button.setMenu(self.manage_plan_menu)
+        self.manage_plan_button.setToolTip("管理已保存的课程表方案（保存、加载、删除）")
+        self.manage_plan_button.setIcon(FluentIcon.LIBRARY)
+        self.manage_plan_button.setFixedSize(160,40)
+        self.manage_plan_button.clicked.connect(self.manage_plan)
         add_widget(self.manage_plan_button,self.operation_layout)
-        self.refresh_plan_actions()
 
         self.curr_plan=write("当前方案：无",self,self.operation_layout,0)
         self.curr_plan.setFixedHeight(40)
@@ -637,7 +631,7 @@ class Generate(QFrame):
             self.push_history()
             # 禁用生成按钮防止重复点击
             self.generate_button.setEnabled(False)
-            self.load_plan_action.setEnabled(False)
+            self.manage_plan_button.setEnabled(False)
             self.check_conflict_button.setEnabled(False)
             self.progress_toast.show()
             self.progress_bar.setValue(0)
@@ -691,7 +685,7 @@ class Generate(QFrame):
         lesson_info.saved=False
         self.generate_button.setEnabled(True)
         self.check_conflict_button.setEnabled(True)
-        self.refresh_plan_actions()
+        self.manage_plan_button.setEnabled(True)
         self.curr_plan.setText("当前方案：未保存")
         self.progress_toast.hide()
         self.taskbar_progress.clear()
@@ -1352,84 +1346,47 @@ class Generate(QFrame):
         self.save_Toast.close()
         Toast.error("课程表导出失败！",error,parent=self,duration=-1)
 
-    def refresh_plan_actions(self):
-        self.load_plan_action.setEnabled(len(cfg.timetable_plans.value)>0)
-        self.del_plan_action.setEnabled(len(cfg.timetable_plans.value)>0)
-
-    def save_plan(self):
-        try:
-            logging.info("保存课程表方案")
-            plan_time=time.strftime("%Y-%m-%d %H:%M:%S",time.localtime())
-            save_plan_msg=SaveTimetablePlan(plan_time,self.curr_plan.text()[5:],self)
-            if not save_plan_msg.exec():
-                logging.info("用户取消保存")
-                return
-            plan_name=save_plan_msg.name_input.text()
-            plan_desc=save_plan_msg.desc_input.text()
-            save_current_plan(plan_name,plan_desc,plan_time)
-            self.curr_plan.setText("当前方案："+plan_name)
-            lesson_info.saved=True
-            self.refresh_plan_actions()
-            logging.info("课程表方案保存成功")
-            Toast.success("课程表方案保存成功！",f"成功保存方案：{plan_name}",parent=self,duration=3000)
-        except Exception as error:
-            e=traceback.format_exc()
-            logging.critical(f"保存课程表方案出错：\n{e}")
-            show_error(self,error)
-
-    def load_plan(self):
-        try:
-            logging.info("加载课程表方案")
-            load_plan_msg=LoadTimetablePlan(self)
-            if not load_plan_msg.exec():
-                logging.info("用户取消加载")
-                return
-            if not lesson_info.saved:
-                msgbox=MessageBox("确定加载课程表方案？","加载方案会使当前的所有修改丢失，建议先保存当前课程表方案，是否继续加载方案？",self)
-                if not msgbox.exec():
+    def manage_plan(self):
+        """统一管理课程表方案（保存、加载、删除）"""
+        plan_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        manage_msg = PlanManagerMsgbox(plan_time=plan_time, curr_plan_name=self.curr_plan.text()[5:], parent=self)
+        if manage_msg.exec():
+            action = manage_msg.action_taken
+            if action == "save":
+                # 保存已在对话框内完成，这里只同步界面状态
+                self.curr_plan.setText("当前方案：" + manage_msg.action_plan_name)
+                lesson_info.saved = True
+                logging.info(f"课程表方案保存成功：{manage_msg.action_plan_name}")
+            elif action == "load":
+                plan_name = manage_msg.action_plan_name
+                if not os.path.exists(os.path.join(appdata, cfg.timetable_plans.value[plan_name]["filename"])):
+                    Toast.error("方案文件已丢失，无法加载", "", duration=-1, parent=self)
                     return
-            plan_name=load_plan_msg.plan_list.selectedItems()[0].text().split("\n")[0]
-            plan=read_plan_file(cfg.timetable_plans.value[plan_name]["filename"])
-            if not check_plan_compatible(plan):
-                Toast.error("课程表方案与当前设置不匹配",f"加载的课程表方案不是在当前设置下生成的",duration=-1,parent=self)
-                logging.error("课程表方案加载失败")
-                return
-
-            self.push_history()
-            apply_plan(plan)
-            self.curr_plan.setText("当前方案："+plan_name)
-            logging.info("课程表方案加载成功")
-            Toast.success("课程表方案加载成功",f"成功加载方案：{plan_name}",parent=self,duration=3000)
-
-            self.show_object_tree()
-            self.refresh_timetable()
-            self.hide_lesson_details()
-            lesson_info.saved=True
-        except Exception as error:
-            e=traceback.format_exc()
-            logging.critical(f"加载课程表方案出错：\n{e}")
-            show_error(self,error)
-
-    def del_plan(self):
-        try:
-            logging.info("删除课程表方案")
-            del_plan_msg=DelTimetablePlan(self)
-            if not del_plan_msg.exec():
-                logging.info("用户取消删除")
-                return
-            plans=del_plan_msg.plan_list.selectedItems()
-            plan_names=[plan.text().split("\n")[0] for plan in plans]
-            if self.curr_plan.text()[5:] in plan_names:
-                self.curr_plan.setText("当前方案：未保存")
-                lesson_info.saved=False
-            delete_plans(plan_names)
-            self.refresh_plan_actions()
-            logging.info("课程表方案删除成功")
-            Toast.success("课程表方案删除成功！",f"成功删除方案：{', '.join(plan_names)}",parent=self,duration=3000)
-        except Exception as error:
-            e=traceback.format_exc()
-            logging.critical(f"删除课程表方案出错：\n{e}")
-            show_error(self,error)
+                if not lesson_info.saved:
+                    msgbox = MessageBox("确定加载课程表方案？", "加载方案会使当前的所有修改丢失，建议先保存当前课程表方案，是否继续加载方案？", self)
+                    if not msgbox.exec():
+                        return
+                plan = read_plan_file(cfg.timetable_plans.value[plan_name]["filename"])
+                if not check_plan_compatible(plan):
+                    Toast.error("课程表方案与当前设置不匹配", "加载的课程表方案不是在当前设置下生成的", duration=-1, parent=self)
+                    logging.error("课程表方案加载失败")
+                    return
+                self.push_history()
+                apply_plan(plan)
+                self.curr_plan.setText("当前方案：" + plan_name)
+                logging.info(f"课程表方案加载成功：{plan_name}")
+                Toast.success("课程表方案加载成功", f"成功加载方案：{plan_name}", parent=self, duration=3000)
+                self.show_object_tree()
+                self.refresh_timetable()
+                self.hide_lesson_details()
+                lesson_info.saved = True
+            elif action == "delete":
+                # 删除已在对话框内完成，这里只同步界面状态
+                plan_names = manage_msg.action_plan_name
+                if self.curr_plan.text()[5:] in plan_names:
+                    self.curr_plan.setText("当前方案：未保存")
+                    lesson_info.saved = False
+                logging.info(f"课程表方案删除成功：{', '.join(plan_names)}")
 
     def ask_force(self,target_time:Time)->bool:
         logging.info("询问是否强制调课")

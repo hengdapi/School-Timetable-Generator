@@ -21,6 +21,7 @@ with open("app_version.txt","r",encoding="utf-8") as f:
     app_version=f.read()
 logging.basicConfig(format="[%(levelname)s] %(asctime)s %(filename)s %(funcName)s %(lineno)d行:\t%(message)s",
                     level=logging.INFO,
+                    # level=logging.DEBUG,
                     filename=None,
                     encoding="utf-8")
 

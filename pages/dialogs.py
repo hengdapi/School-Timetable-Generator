@@ -1,37 +1,109 @@
 """生成页面用到的各种对话框（前端组件，不含业务逻辑）"""
 
-import os.path
+import time
 
 from PySide6.QtCore import QSize
 
 from pages.ui_widgets import *
+from core.timetable_core import save_current_plan, delete_plans
 
 
-class SaveTimetablePlan(MessageBoxBase):
-    def __init__(self, plan_time,curr_plan_name, parent=None):
+class PlanManagerMsgbox(MessageBoxBase):
+    """整合保存/加载/删除课程表方案的操作对话框，模仿 MergeLessonsMsgbox 布局"""
+
+    def __init__(self, plan_time: str = "", curr_plan_name: str = "", parent=None):
         super().__init__(parent=parent)
-        subheader("保存课程表方案",self,self.viewLayout)
-        write("方案名称（若选择已有方案名称则覆盖该方案）：",self,self.viewLayout,0)
-        self.name_input=EditableComboBox()
+        self.action_taken = None  # 记录用户执行的操作："save"|"load"|"delete"|None
+        self.action_plan_name = None  # 保存/删除的方案名称，供调用方读取结果
+        self.action_plan_desc = ""  # 保存的方案描述
+        # --- 方案列表 ---
+        subheader("课程表方案", self, self.viewLayout)
+        write("在下方列表中选择方案，可按住ctrl进行多选：", self, self.viewLayout, 0)
+        self.plan_list = RoundListWidget(self)
+        self.delegate = RoundListItemDelegate(self.plan_list)
+        self.delegate.sizeHint = lambda option, idx: QSize(option.rect.width(), 72)
+        self.plan_list.setItemDelegate(self.delegate)
+        self.plan_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.plan_list.currentItemChanged.connect(self.on_list_selected)
+        # itemSelectionChanged 覆盖点击、键盘、多选等所有选择变化（clicked 不覆盖程序化选择）
+        self.plan_list.itemSelectionChanged.connect(self.refresh_button_states)
+        add_widget(self.plan_list, self.viewLayout, 0)
+
+        # --- 方案信息输入 ---
+        self.operation_layout = QGridLayout()
+        self.operation_layout.setColumnStretch(1, 1)
+        self.operation_layout.addWidget(write("方案名称：", self, QVBoxLayout()), 0, 0)
+        self.operation_layout.addWidget(write("方案描述：", self, QVBoxLayout()), 1, 0)
+        self.name_input = EditableComboBox()
         self.name_input.addItems(cfg.timetable_plans.value.keys())
-        self.name_input.setCompleter(QCompleter(cfg.timetable_plans.value.keys(),self.name_input))
+        self.name_input.setCompleter(QCompleter(list(cfg.timetable_plans.value.keys()), self.name_input))
+        self.name_input.setMaximumWidth(400)
         self.name_input.textChanged.connect(self.on_input_name)
-        add_widget(self.name_input,self.viewLayout)
-        write("方案描述：",self,self.viewLayout,0)
-        self.desc_input=LineEdit()
-        add_widget(self.desc_input,self.viewLayout)
+        self.operation_layout.addWidget(self.name_input, 0, 1)
+        self.desc_input = LineEdit()
+        self.desc_input.setMaximumWidth(400)
+        self.operation_layout.addWidget(self.desc_input, 1, 1)
+        self.viewLayout.addLayout(self.operation_layout)
+
+        # --- 操作按钮 ---
         self.yesButton.setText("保存方案")
         self.yesButton.setIcon(FluentIcon.SAVE)
-        self.cancelButton.setText("取消")
-        if curr_plan_name!="未保存" and curr_plan_name!="无":
-            self.name_input.setText(curr_plan_name)
+
+        self.loadButton = PushButton("加载方案")
+        self.loadButton.setIcon(FluentIcon.HISTORY)
+        self.loadButton.clicked.connect(self.load_plan)
+        self.buttonLayout.insertWidget(1, self.loadButton)
+
+        self.deleteButton = PushButton("删除方案")
+        self.deleteButton.setIcon(FluentIcon.DELETE)
+        self.deleteButton.clicked.connect(self.del_plan)
+        self.buttonLayout.insertWidget(2, self.deleteButton)
+
+        self.cancelButton.setText("关闭")
+        self.cancelButton.setIcon(FluentIcon.CLOSE)
+
+        # 初始化当前方案名称
+        self.plan_time = plan_time
+        self.curr_plan_name = curr_plan_name if curr_plan_name not in ("未保存", "无") else ""
+        if self.curr_plan_name:
+            self.name_input.setText(self.curr_plan_name)
             self.on_input_name()
-        
-    def validate(self) -> bool:
-        if not self.name_input.text():
-            Toast.error("请输入方案名称","",duration=-1,parent=self)
-            return False
-        return True
+
+        self.refresh_plans_list()
+
+    def refresh_button_states(self):
+        self.loadButton.setEnabled(bool(self.plan_list.selectedItems()))
+        self.deleteButton.setEnabled(bool(self.plan_list.selectedItems()))
+        self.loadButton.setEnabled(len(self.plan_list.selectedItems()) == 1)
+
+    def refresh_plans_list(self):
+        self.plan_list.clear()
+        self.plan_list.setFixedHeight(min(275, len(cfg.timetable_plans.value) * 72)+20)
+        for plan_name, plan_info in cfg.timetable_plans.value.items():
+            item = QListWidgetItem(f"{plan_name}\n保存时间：{plan_info['time']}\n描述：{plan_info['desc']}")
+            item.setData(Qt.UserRole, plan_name)
+            self.plan_list.addItem(item)
+        # 方案名候选列表同步更新（保存新方案/删除方案后补全与下拉仍可用），并保留已输入的文本
+        plan_names = list(cfg.timetable_plans.value.keys())
+        if [self.name_input.itemText(i) for i in range(self.name_input.count())] != plan_names:
+            curr_text = self.name_input.text()
+            self.name_input.clear()
+            self.name_input.addItems(plan_names)
+            self.name_input.setCompleter(QCompleter(plan_names, self.name_input))
+            if curr_text in plan_names:
+                self.name_input.setCurrentText(curr_text)
+        # addItems 不会触发 textChanged，这里显式同步一次按钮文案（保存方案/覆盖方案）
+        self.on_input_name()
+        self.refresh_button_states()
+
+    def on_list_selected(self, item):
+        if not item:
+            return
+        plan_name = item.data(Qt.UserRole)
+        plan_info = cfg.timetable_plans.value[plan_name]
+        self.name_input.setText(plan_name)
+        self.desc_input.setText(plan_info["desc"])
+        self.refresh_button_states()
 
     def on_input_name(self):
         if self.name_input.text() in cfg.timetable_plans.value:
@@ -40,53 +112,56 @@ class SaveTimetablePlan(MessageBoxBase):
         else:
             self.yesButton.setText("保存方案")
 
-class LoadTimetablePlan(MessageBoxBase):
-    def __init__(self,parent=None):
-        super().__init__(parent=parent)
-        subheader("加载课程表方案",self,self.viewLayout)
-        self.plan_list=RoundListWidget(self)
-        # 通过自定义 Delegate 设置项高度（不破坏原有 QSS）
-        self.delegate=RoundListItemDelegate(self.plan_list)
-        self.delegate.sizeHint=lambda option,idx:QSize(option.rect.width(),72)
-        self.plan_list.setItemDelegate(self.delegate)
-        for plan_name,plan_info in cfg.timetable_plans.value.items():
-            self.plan_list.addItem(f"{plan_name}\n保存时间：{plan_info['time']}\n描述：{plan_info['desc']}")
-        add_widget(self.plan_list,self.viewLayout,0)
-        self.yesButton.setText("加载方案")
-        self.yesButton.setIcon(FluentIcon.HISTORY)
-
-    def validate(self) -> bool:
-        if not self.plan_list.selectedItems():
-            Toast.error("请选择要加载的方案","",duration=-1,parent=self)
-            return False
-        plan_name=self.plan_list.selectedItems()[0].text().split("\n")[0]
-        if not os.path.exists(os.path.join(appdata,cfg.timetable_plans.value[plan_name]["filename"])):
-            Toast.error("方案文件已丢失，无法加载","",duration=-1,parent=self)
+    def check(self):
+        if len(self.name_input.text()) < 1:
+            Toast.error("请输入方案名称", "", parent=self, duration=2000)
             return False
         return True
 
-class DelTimetablePlan(MessageBoxBase):
-    def __init__(self,parent=None):
-        super().__init__(parent=parent)
-        subheader("删除课程表方案",self,self.viewLayout)
-        write("在下方列表拖动或按住ctrl可多选：",self,self.viewLayout,0)
-        self.plan_list=RoundListWidget(self)
-        # 通过自定义 Delegate 设置项高度（不破坏原有 QSS）
-        self.delegate=RoundListItemDelegate(self.plan_list)
-        self.delegate.sizeHint=lambda option,idx:QSize(option.rect.width(),72)
-        self.plan_list.setItemDelegate(self.delegate)
-        self.plan_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        for plan_name,plan_info in cfg.timetable_plans.value.items():
-            self.plan_list.addItem(f"{plan_name}\n保存时间：{plan_info['time']}\n描述：{plan_info['desc']}")
-        add_widget(self.plan_list,self.viewLayout,0)
-        self.yesButton.setText("删除方案")
-        self.yesButton.setIcon(FluentIcon.DELETE)
-
     def validate(self) -> bool:
-        if not self.plan_list.selectedItems():
-            Toast.error("请选择要删除的方案","",duration=-1,parent=self)
+        if not self.check():
             return False
-        return True
+        plan_name = self.name_input.text()
+        plan_desc = self.desc_input.text()
+        plan_time = self.plan_time or time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        save_current_plan(plan_name, plan_desc, plan_time)
+        self.refresh_plans_list()
+        # 刷新会清空选中，按方案名重新选中，便于保存后直接加载/删除
+        for row in range(self.plan_list.count()):
+            if self.plan_list.item(row).data(Qt.UserRole) == plan_name:
+                self.plan_list.setCurrentRow(row)
+                break
+        self.action_taken = "save"
+        self.action_plan_name = plan_name
+        self.action_plan_desc = plan_desc
+        Toast.success("方案保存成功", f"成功保存方案：{plan_name}", parent=self, duration=3000)
+        return False
+
+    def load_plan(self):
+        """记录要加载的方案并关闭对话框，由调用方确认后应用（保证撤销栈记录的是加载前的课表）"""
+        if not self.plan_list.selectedItems():
+            return
+        self.action_taken = "load"
+        self.action_plan_name = self.plan_list.selectedItems()[0].data(Qt.UserRole)
+        self.accept()
+
+    def del_plan(self):
+        selected_items = self.plan_list.selectedItems()
+        if not selected_items:
+            return
+        plan_names = [item.data(Qt.UserRole) for item in selected_items]
+        dialog = MessageBox("确认删除方案？", f"删除方案将会永久删除方案文件，确定要删除以下方案吗？\n{', '.join(plan_names)}", self)
+        if not dialog.exec():
+            return
+        delete_plans(plan_names)
+        self.curr_plan_name = ""
+        self.action_taken = "delete"
+        self.action_plan_name = plan_names
+        # 输入框里可能正显示刚被删掉的方案名，先清空再刷新，避免误覆盖
+        self.name_input.setText("")
+        self.desc_input.clear()
+        self.refresh_plans_list()
+        Toast.success("方案删除成功", f"成功删除方案：{', '.join(plan_names)}", parent=self, duration=3000)
 
 class ForceExchangeMsgbox(MessageBoxBase):
     def __init__(self,failed_reasons:dict[str,set[str]],conflict_lessons:set[tuple[Class,Time]], parent=None):
