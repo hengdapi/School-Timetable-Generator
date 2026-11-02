@@ -372,23 +372,23 @@ def _check_rule_conflicts(classes:list[Class])->list[Conflict]:
                                 f"规则冲突：{subject} 与 {other} 不能排在同一时间，{time} {clas} 排了 {subject}，{classes} 排了 {other}"))
                 elif isinstance(rule,AvoidTeacherRule):
                     for subject in subjects:
-                        teacher=clas.get_teacher(subject)
-                        others=rule.teachersB if teacher in rule.teachersA else rule.teachersA if teacher in rule.teachersB else []
-                        for teacher2 in others:
-                            if teacher2 is teacher:
-                                continue
-                            entries=_teacher_time_entries(teacher2,time)
-                            if entries:
-                                detail="、".join([f"{c} 的 {s}" for c,s,_ in entries])
-                                conflicts.append(Conflict("规则冲突",clas,time,
-                                    f"规则冲突：{teacher} 老师与 {teacher2} 老师不能在同一时间排课，{time} {clas} 的 {subject} 由 {teacher} 授课，{teacher2} 同时有 {detail}"))
+                        for teacher in clas.get_teachers(subject):
+                            others=rule.teachersB if teacher in rule.teachersA else rule.teachersA if teacher in rule.teachersB else []
+                            for teacher2 in others:
+                                if teacher2 is None or teacher2 is teacher:
+                                    continue
+                                entries=_teacher_time_entries(teacher2,time)
+                                if entries:
+                                    detail="、".join([f"{c} 的 {s}" for c,s,_ in entries])
+                                    conflicts.append(Conflict("规则冲突",clas,time,
+                                        f"规则冲突：{teacher} 老师与 {teacher2} 老师不能在同一时间排课，{time} {clas} 的 {subject} 由 {teacher} 授课，{teacher2} 同时有 {detail}"))
                 elif isinstance(rule,TeacherAvoidTimeRule):
                     if time in rule.times:
                         for subject in subjects:
-                            teacher=clas.get_teacher(subject)
-                            if teacher in rule.teachers:
-                                conflicts.append(Conflict("规则冲突",clas,time,
-                                    f"规则冲突：{teacher} 老师不能在 {time} 排课，但 {clas} 在该时间有 {subject} 课"))
+                            for teacher in clas.get_teachers(subject):
+                                if teacher in rule.teachers:
+                                    conflicts.append(Conflict("规则冲突",clas,time,
+                                        f"规则冲突：{teacher} 老师不能在 {time} 排课，但 {clas} 在该时间有 {subject} 课"))
         # ---- 与整个班级课表相关的规则 ----
         for rule in clas_rules:
             if isinstance(rule,EverydaySubjectRule):
@@ -413,7 +413,7 @@ def _check_rule_conflicts(classes:list[Class])->list[Conflict]:
                 continue  # 检查范围内没有该规则涉及的班级
             for teacher in rule.teachers:
                 for rule_time in rule.times:
-                    if not any(clas.get_teacher(subject)==teacher
+                    if not any(teacher in clas.get_teachers(subject)
                                for clas in rule.scope for subject in clas.get_lessons(rule_time)):
                         conflicts.append(Conflict("规则冲突",in_scope[0],rule_time,
                             f"规则冲突：{teacher} 老师必须在 {rule_time} 排课，但该时间没有排课"))

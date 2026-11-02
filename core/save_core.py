@@ -1,4 +1,5 @@
 import openpyxl.worksheet.worksheet
+from PySide6.QtCore import QThread
 
 from locals import *
 from openpyxl import Workbook
@@ -47,7 +48,7 @@ for grade in grades:
     teachers[grade]=set()
     for class_name in cfg.grades_info.value[grade]:
         clas=lesson_info.classes[class_name]
-        teachers[grade]|={teacher.name for teacher in clas.teachers.values()}
+        teachers[grade]|={teacher.name for class_teachers in clas.teachers.values() for teacher in class_teachers}
 
 def column_letter(index):
     """将数字列索引转换为Excel列字母（1->A, 2->B, ..., 27->AA）"""

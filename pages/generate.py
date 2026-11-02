@@ -1,7 +1,7 @@
 import os.path
 
 from PySide6 import QtGui
-from PySide6.QtCore import QRectF
+from PySide6.QtCore import QRectF,QByteArray
 from PySide6.QtGui import QKeySequence,QShortcut
 
 from core.generate_core import *
@@ -268,24 +268,26 @@ class Generate(QFrame):
 
         self.teacher_timetable_pane=QWidget()
         self.teacher_timetable_pane.hide()
-        self.teacher_timetable_layout=QVBoxLayout(self.teacher_timetable_pane)
-        self.teacher_timetable_subheader=subheader("教师课程表",self,self.teacher_timetable_layout,0)
-        self.teacher_timetable_preview=FontTableWidget()
-        self.teacher_timetable_preview.setFont(QFont("Microsoft YaHei", 7))
-        self.teacher_timetable_preview.horizontalHeader().setFixedHeight(15)
-        self.teacher_timetable_preview.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.teacher_timetable_preview.verticalHeader().setVisible(False)
-        self.teacher_timetable_preview.itemDoubleClicked.connect(self.jump_to_class_from_cell)
-        add_widget(self.teacher_timetable_preview,self.teacher_timetable_layout,10)
+        pane_layout=QVBoxLayout(self.teacher_timetable_pane)
+        pane_layout.setContentsMargins(0,0,0,0)
+        pane_layout.setSpacing(0)
+        # 老师可能有多位（联合授课时要一位一张），课表纵向排列并整体滚动，
+        # 保证每张课表都能按固定行高完整显示，不被挤压
+        self.teacher_scroll=SingleDirectionScrollArea(orient=Qt.Vertical)
+        self.teacher_scroll.setWidgetResizable(True)
+        self.teacher_scroll.setStyleSheet("QScrollArea{background: transparent; border: none;}")
+        teacher_view=QWidget()
+        teacher_view.setStyleSheet("QWidget{background: transparent}")
+        self.teacher_timetable_layout=QVBoxLayout(teacher_view)
+        self.teacher_timetable_layout.setContentsMargins(0,0,0,0)
+        self.teacher_timetable_layout.setSpacing(10)
+        self.teacher_scroll.setWidget(teacher_view)
+        pane_layout.addWidget(self.teacher_scroll)
 
-        self.teacher2_timetable_subheader=subheader("教师2课程表",self,self.teacher_timetable_layout,0)
-        self.teacher2_timetable_preview=FontTableWidget()
-        self.teacher2_timetable_preview.setFont(QFont("Microsoft YaHei", 7))
-        self.teacher2_timetable_preview.horizontalHeader().setFixedHeight(15)
-        self.teacher2_timetable_preview.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.teacher2_timetable_preview.verticalHeader().setVisible(False)
-        self.teacher2_timetable_preview.itemDoubleClicked.connect(self.jump_to_class_from_cell)
-        add_widget(self.teacher2_timetable_preview,self.teacher_timetable_layout,0)
+        # 右侧教师课表预览：(标题, 课表) 列表。联合授课时一位老师一张，不够则按需创建
+        self.teacher_panes:list[tuple]=[]
+        self.teacher_timetable_subheader,self.teacher_timetable_preview=self.teacher_pane_at(0)
+        self.teacher2_timetable_subheader,self.teacher2_timetable_preview=self.teacher_pane_at(1)
 
         self.preview_splitter.addWidget(self.teacher_timetable_pane)
         self.object_splitter.addWidget(self.preview_splitter)
@@ -324,7 +326,8 @@ class Generate(QFrame):
     def resizeEvent(self, event: QtGui.QResizeEvent, /) -> None:
         # 延迟到下一事件循环，等窗口完成最小化/最大化/还原的状态切换后再重算课表尺寸，
         # 避免在状态转换中间拿到错误的内部尺寸。
-        QTimer.singleShot(50, self.set_timetables_size)
+        # QTimer.singleShot(50, self.set_timetables_size)
+        self.set_timetables_size()
         super().resizeEvent(event)
 
     def show_object_tree(self):
@@ -455,20 +458,45 @@ class Generate(QFrame):
             for col in range(self.timetable_preview.columnCount()):
                 self.timetable_preview.setColumnWidth(col,(self.timetable_preview.width()-90)//self.timetable_preview.columnCount())
 
-            for row in range(self.teacher_timetable_preview.rowCount()):
-                self.teacher_timetable_preview.setRowHeight(row,40)
-            for col in range(self.teacher_timetable_preview.columnCount()):
-                self.teacher_timetable_preview.setColumnWidth(col,self.teacher_timetable_preview.width()//self.teacher_timetable_preview.columnCount())
-
-            for row in range(self.teacher2_timetable_preview.rowCount()):
-                self.teacher2_timetable_preview.setRowHeight(row,40)
-            for col in range(self.teacher2_timetable_preview.columnCount()):
-                self.teacher2_timetable_preview.setColumnWidth(col,self.teacher2_timetable_preview.width()//self.teacher2_timetable_preview.columnCount())
+            self.update_teacher_pane_sizes()
         else:
             for row in range(self.timetable_preview.rowCount()):
                 self.timetable_preview.setRowHeight(row,60)
             for col in range(self.timetable_preview.columnCount()):
                 self.timetable_preview.setColumnWidth(col,110)
+
+    def update_teacher_pane_sizes(self):
+        """教师课表尺寸：1~2 位老师时标题和表格撑满窗格，3 位及以上改成固定行高 + 滚动
+
+        撑满模式下表格随面板高度伸缩、行高自动均分，不会在表格上方留出大片空白；
+        老师多到放不下时才切成滚动模式，保证每张课表都能完整看到、又不会被压扁。
+        """
+        visible_panes=[(pane_subheader,pane_table) for pane_subheader,pane_table in self.teacher_panes
+                       if not pane_table.isHidden()]
+        fill_mode=len(visible_panes)<=2
+        for pane_subheader,pane_table in self.teacher_panes:
+            # 标题只占自身高度，不要把多出来的空间都吸走（否则表格上方会有一大片空白）
+            pane_subheader.setSizePolicy(QSizePolicy.Preferred,QSizePolicy.Fixed)
+            pane_table.setSizePolicy(QSizePolicy.Expanding,QSizePolicy.Expanding if fill_mode else QSizePolicy.Fixed)
+        if fill_mode:
+            for pane_subheader,pane_table in visible_panes:
+                pane_table.setMinimumHeight(0)
+                pane_table.setMaximumHeight(16777215)
+                # 行高随表格高度均分，正好把窗格撑满
+                pane_table.verticalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        else:
+            for pane_subheader,pane_table in visible_panes:
+                pane_table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+                for row in range(pane_table.rowCount()):
+                    pane_table.setRowHeight(row,40)
+                pane_table.setFixedHeight(max(pane_table.horizontalHeader().height(),15)+pane_table.rowCount()*40+4)
+        # 撑满模式内容高度跟随视口，滚动模式把内容撑到实际需要的高度，滚动条才会出现
+        content=self.teacher_scroll.widget()
+        if fill_mode:
+            content.setMinimumHeight(0)
+        else:
+            self.teacher_timetable_layout.activate()
+            content.setMinimumHeight(self.teacher_timetable_layout.minimumSize().height())
 
     def on_splitter_moved(self):
         cfg.preview_splitter_state.value=bytes(self.preview_splitter.saveState().toBase64()).decode()
@@ -515,14 +543,14 @@ class Generate(QFrame):
                 item.setTextAlignment(Qt.AlignCenter)
                 self.timetable_preview.setItem(row,column,item)
             if len(subjects)>=2:  # 单双周两节课：用上下分隔的控件显示
-                sin_text=subjects[0].name+("\n"+str(clas.get_teacher(subjects[0])) if cfg.show_teachers.value else "")
-                dou_text=subjects[1].name+("\n"+str(clas.get_teacher(subjects[1])) if cfg.show_teachers.value else "")
+                sin_text=subjects[0].name+("\n"+clas.get_teacher_names(subjects[0]) if cfg.show_teachers.value else "")
+                dou_text=subjects[1].name+("\n"+clas.get_teacher_names(subjects[1]) if cfg.show_teachers.value else "")
                 self.timetable_preview.setCellWidget(row,column,sindou_widget(sin_text,dou_text,self.timetable_preview.font()))
                 item.setText("")
             else:
                 if self.timetable_preview.cellWidget(row,column) is not None:
                     self.timetable_preview.removeCellWidget(row,column)
-                item.setText(str(subjects[0])+("\n"+str(clas.get_teacher(subjects[0])) if cfg.show_teachers.value else ""))
+                item.setText(str(subjects[0])+("\n"+clas.get_teacher_names(subjects[0]) if cfg.show_teachers.value else ""))
             item.setData(Qt.UserRole,item.text())
 
     def on_history_restored(self,changed:dict[str,set[Time]]|None=None):
@@ -780,6 +808,30 @@ class Generate(QFrame):
         except Exception as error:
             logging.debug(f"暂存课程拖拽预览出错：{error}")
 
+    def create_teacher_pane(self)->tuple:
+        """新建一组"教师课表"标题与课表（联合授课时每位老师各一张，按需创建）"""
+        pane_subheader=subheader("教师课程表",self,self.teacher_timetable_layout,0)
+        pane_table=FontTableWidget()
+        pane_table.setFont(QFont("Microsoft YaHei",7))
+        pane_table.horizontalHeader().setFixedHeight(15)
+        # 列宽随面板宽度均分，避免出现横向滚动条；表格高度由内容决定（见 set_timetables_size）
+        pane_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        pane_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        pane_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        pane_table.verticalHeader().setVisible(False)
+        pane_table.itemDoubleClicked.connect(self.jump_to_class_from_cell)
+        # 间距由布局统一设置，隐藏的面板就不会留下多余的空白
+        self.teacher_timetable_layout.addWidget(pane_table)
+        pane_subheader.hide()
+        pane_table.hide()
+        return pane_subheader,pane_table
+
+    def teacher_pane_at(self,index:int)->tuple:
+        """取第 index 组教师课表面板，数量不够时自动新建"""
+        while len(self.teacher_panes)<=index:
+            self.teacher_panes.append(self.create_teacher_pane())
+        return self.teacher_panes[index]
+
     def show_lesson_details(self,source_subjects:list[Subject],curr_time:Time|None,exchange:bool=True):
         try:
             if self.preview_mode!="class" or not source_subjects:
@@ -789,29 +841,32 @@ class Generate(QFrame):
             self._last_details_args=(source_subjects,curr_time,exchange)
             self.show_check_result(source_subjects,curr_time,exchange)
 
-            teacher=clas.get_teacher(source_subjects[0])
-            display_teachers_timetable(teacher,self.teacher_timetable_preview,False)
-            self.teacher_pane_teachers[self.teacher_timetable_preview]=teacher
-            self.teacher_timetable_subheader.setText(f"任课教师 {teacher.name} 课程表")
-            if curr_time:
-                teacher_item=self.teacher_timetable_preview.item(curr_time.lesson-1,curr_time.day-1)
-                if teacher_item:
-                    teacher_item.setBackground(colors["curr"])
-            if len(source_subjects)==2:
-                teacher2=clas.get_teacher(source_subjects[1])
-                display_teachers_timetable(teacher2,self.teacher2_timetable_preview,False)
-                self.teacher_pane_teachers[self.teacher2_timetable_preview]=teacher2
-                self.teacher_timetable_subheader.setText(f"单周任课教师 {teacher.name} 课程表")
-                self.teacher2_timetable_subheader.setText(f"双周任课教师 {teacher2.name} 课程表")
+            # 右侧预览：每位任课老师各显示一张课表，联合授课时可以看到所有老师的安排
+            week_labels=["单周","双周"] if len(source_subjects)==2 else [""]
+            teacher_panes=[]
+            for week_label,source_subject in zip(week_labels,source_subjects):
+                for subject_teacher in clas.get_teachers(source_subject):
+                    title=f"{week_label} {subject_teacher.name} 课程表" if week_label else f"{subject_teacher.name} 课程表"
+                    teacher_panes.append((title,subject_teacher))
+            for index,(title,subject_teacher) in enumerate(teacher_panes):
+                pane_subheader,pane_table=self.teacher_pane_at(index)
+                pane_subheader.setText(title)
+                pane_subheader.show()
+                pane_table.show()
+                display_teachers_timetable(subject_teacher,pane_table,False)
+                self.teacher_pane_teachers[pane_table]=subject_teacher
                 if curr_time:
-                    teacher_item=self.teacher2_timetable_preview.item(curr_time.lesson-1,curr_time.day-1)
-                    if teacher_item:
-                        teacher_item.setBackground(colors["curr"])
-                self.teacher2_timetable_subheader.show()
-                self.teacher2_timetable_preview.show()
-            else:
-                self.teacher2_timetable_subheader.hide()
-                self.teacher2_timetable_preview.hide()
+                    pane_item=pane_table.item(curr_time.lesson-1,curr_time.day-1)
+                    if pane_item:
+                        pane_item.setBackground(colors["curr"])
+            # 多余的课表面板（上次显示联合授课留下的）隐藏掉
+            for pane_subheader,pane_table in self.teacher_panes[len(teacher_panes):]:
+                pane_subheader.hide()
+                pane_table.hide()
+                self.teacher_pane_teachers.pop(pane_table,None)
+            if not teacher_panes:
+                self.teacher_timetable_pane.hide()
+                return
             self.teacher_timetable_pane.show()
             self.set_timetables_size()
         except Exception as error:
@@ -974,7 +1029,7 @@ class Generate(QFrame):
         unique_subjects=list(dict.fromkeys(self.preview_object.left_subjects))
         for subject in unique_subjects:
             remain_num=self.preview_object.get_subject_left_num(subject)
-            card=DraggableLessonCard(subject,self.preview_object.get_teacher(subject),remain_num=remain_num)
+            card=DraggableLessonCard(subject,self.preview_object.get_teacher_names(subject),remain_num=remain_num)
             # 点击或开始拖拽卡片时在课表立刻高亮能否放入
             card.card_activated.connect(self.on_stored_card_activated)
             self.lesson_storage_layout.addWidget(card)
@@ -1175,8 +1230,8 @@ class Generate(QFrame):
                     curr_item.setData(Qt.UserRole,curr_item.text())
                     if len(curr_subjects)<2:
                         continue
-                    sin_text=curr_subjects[0].name+("\n"+self.preview_object.get_teacher(curr_subjects[0]).name if cfg.show_teachers.value else "")
-                    dou_text=curr_subjects[1].name+("\n"+self.preview_object.get_teacher(curr_subjects[1]).name if cfg.show_teachers.value else "")
+                    sin_text=curr_subjects[0].name+("\n"+self.preview_object.get_teacher_names(curr_subjects[0]) if cfg.show_teachers.value else "")
+                    dou_text=curr_subjects[1].name+("\n"+self.preview_object.get_teacher_names(curr_subjects[1]) if cfg.show_teachers.value else "")
                     self.timetable_preview.setCellWidget(lesson-1,day-1,sindou_widget(sin_text,dou_text,self.timetable_preview.font()))
                     self.timetable_preview.setCellWidget(lesson-1,day-1,sindou_widget(sin_text,dou_text,self.timetable_preview.font()))
                     curr_item.setText("")
@@ -1264,8 +1319,8 @@ class Generate(QFrame):
                         curr_item.setData(Qt.UserRole,curr_item.text())
                         if len(curr_subjects)<2:
                             continue
-                        sin_text=curr_subjects[0].name+("\n"+self.preview_object.get_teacher(curr_subjects[0]).name if cfg.show_teachers.value else "")
-                        dou_text=curr_subjects[1].name+("\n"+self.preview_object.get_teacher(curr_subjects[1]).name if cfg.show_teachers.value else "")
+                        sin_text=curr_subjects[0].name+("\n"+self.preview_object.get_teacher_names(curr_subjects[0]) if cfg.show_teachers.value else "")
+                        dou_text=curr_subjects[1].name+("\n"+self.preview_object.get_teacher_names(curr_subjects[1]) if cfg.show_teachers.value else "")
                         self.timetable_preview.setCellWidget(lesson-1,day-1,sindou_widget(sin_text,dou_text,self.timetable_preview.font()))
                         self.timetable_preview.setCellWidget(lesson-1,day-1,sindou_widget(sin_text,dou_text,self.timetable_preview.font()))
                         curr_item.setText("")

@@ -365,7 +365,9 @@ class Settings(QFrame):
             new_subjects=[user_info.keys()[i][:-5] for i in range(1,len(user_info.keys()),2)]
             new_teachers=set()
             for subject in new_subjects:
-                new_teachers|=set(user_info[subject+" - 任课老师"].to_list())
+                # 一个单元格里可能填了多个老师（联合授课），要拆成多位老师
+                for cell in user_info[subject+" - 任课老师"].to_list():
+                    new_teachers|=set(split_teacher_names(cell))
             new_teachers=[x for x in new_teachers if not pd.isna(x)]
 
             logging.debug(f"解析完成：{len(old_classes)}个班级，{len(new_subjects)}个科目，{len(new_teachers)}个老师")
@@ -760,7 +762,7 @@ class Settings(QFrame):
             biggersubheader("课程信息",self,self.layout)
 
             # 上传课程信息文件
-            self.user_info_card=SettingCard(icon=FluentIcon.INFO,title="课程信息文件",content="存储任课老师及课时、班级信息的表格")
+            self.user_info_card=SettingCard(icon=FluentIcon.INFO,title="课程信息文件",content="存储任课老师及课时、班级信息的表格。同一格填多位老师（如“张三 李四”）即为联合授课")
             add_widget(self.user_info_card,self.layout)
             self.download_template_button=button("下载导入模板",self,self.user_info_card.layout())
             self.download_template_button.setFixedSize(150,35)

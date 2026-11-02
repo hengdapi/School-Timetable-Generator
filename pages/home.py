@@ -3,7 +3,8 @@ import webbrowser,time
 
 from PySide6.QtGui import QIcon
 
-from locals import gitcode_url,check_update,app_version,github_url
+from core.update_core import check_update
+from locals import gitcode_url,app_version,github_url
 from style import *
 from PySide6.QtCore import QTimer,Qt
 from PySide6.QtWidgets import QFrame,QVBoxLayout

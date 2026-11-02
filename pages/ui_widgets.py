@@ -380,7 +380,8 @@ class DraggableLessonCard(CardWidget):
 
     card_activated = Signal(str,Subject)
 
-    def __init__(self, subject: Subject, teacher: Teacher, remain_num: int = 1, parent=None):
+    def __init__(self, subject: Subject, teacher: "Teacher|str", remain_num: int = 1, parent=None):
+        # teacher 可以是 Teacher，也可以是联合授课时的多位老师姓名字符串（如"张三、李四"）
         super().__init__(parent=parent)
         self.subject = subject
         self.teacher = teacher
@@ -560,6 +561,11 @@ def sindou_widget(sin_text:str,dou_text:str,font:QFont,show_separator=True)->QWi
     return lesson_widget
 
 def display_teachers_timetable(teacher:Teacher,tablewidget:QTableWidget,show_separator=True):
+    # 先清掉上一次渲染留下的单双周行内控件，避免换老师后残留旧内容
+    for row in range(tablewidget.rowCount()):
+        for column in range(tablewidget.columnCount()):
+            if tablewidget.cellWidget(row,column) is not None:
+                tablewidget.removeCellWidget(row,column)
     display_df_in_table(tablewidget,teacher.timetable_dataframe)
     for day in range(1,6):
         for lesson in range(1,cfg.day_class_num+1):

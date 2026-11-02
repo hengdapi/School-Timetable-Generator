@@ -1,7 +1,7 @@
 import logging,os
 import traceback
 
-from qfluentwidgets_pro import QConfig,RangeConfigItem,OptionsConfigItem,BoolValidator,ConfigItem,qconfig,RangeValidator,Toast,ToastPosition
+from qfluentwidgets_pro import QConfig,RangeConfigItem,OptionsConfigItem,BoolValidator,ConfigItem,qconfig,RangeValidator,Toast
 
 settings_file=f"{os.environ["APPDATA"]}/School-Timetable-Generator/settings.json"
 class Settings(QConfig):

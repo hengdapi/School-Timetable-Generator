@@ -47,12 +47,12 @@ def lesson_time_range(lesson: int) -> tuple[str, str]:
     return f"{start_h:02d}:{start_m:02d}:00", f"{end_h:02d}:{end_m:02d}:00"
 
 
-def _get_class_teacher(clas: Class, subject: Subject) -> Teacher | None:
-    """按课程名获取班级任课教师（兼容带【单】【双】【连】前缀的课程名）"""
-    teacher = clas.teachers.get(subject.name)
-    if teacher is None:
-        teacher = clas.teachers.get(clean_subject_name(subject.name))
-    return teacher
+def _get_class_teachers(clas: Class, subject: Subject) -> list[Teacher]:
+    """按课程名获取班级任课教师列表（兼容带【单】【双】【连】前缀的课程名）"""
+    teachers = clas.teachers.get(subject.name)
+    if teachers is None:
+        teachers = clas.teachers.get(clean_subject_name(subject.name))
+    return list(teachers or [])
 
 
 def _subject_weeks(clas: Class, time: Time, subject: Subject) -> tuple[bool, bool]:
@@ -63,11 +63,12 @@ def _subject_weeks(clas: Class, time: Time, subject: Subject) -> tuple[bool, boo
     普通课程两周都有课。
     """
     if subject in clas.half_subjects:
-        teacher = _get_class_teacher(clas, subject)
-        if teacher is None:
+        teachers = _get_class_teachers(clas, subject)
+        if not teachers:
             return False, False
+        # 联合授课时每位老师的记录一致，取第一位即可
         in_sin = any(c is clas and s is subject
-                     for c, s in teacher.timetable[time.sin_week])
+                     for c, s in teachers[0].timetable[time.sin_week])
         return in_sin, not in_sin
     return True, True
 
@@ -194,9 +195,10 @@ def _build_subjects(clas: Class) -> list[dict]:
             if simplified.endswith(suffix):
                 simplified = simplified[:-len(suffix)]
         entry = {"name": name, "simplified_name": simplified[0]}
-        teacher = _get_class_teacher(clas, subject)
-        if teacher:
-            entry["teacher"] = teacher.name
+        teachers = _get_class_teachers(clas, subject)
+        if teachers:
+            # 联合授课的多个老师用空格连接写入 teacher 字段
+            entry["teacher"] = " ".join([teacher.name for teacher in teachers])
         subjects.append(entry)
         used_names.add(name)
     # 每天固定活动同样登记为科目，供日课表中的活动条目引用（活动无任课教师）

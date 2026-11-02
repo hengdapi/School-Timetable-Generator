@@ -1,6 +1,8 @@
 import random
 import time
 
+from PySide6.QtCore import QThread
+
 from core.rules import *
 def check(clas: Class,time: Time,subject: Subject,failed_reasons:set|None=None,conflict_lessons:set|None=None,manual:bool=False,merged:bool=False,merged_failed_reasons:set|None=None) -> bool:
     try:
@@ -9,10 +11,13 @@ def check(clas: Class,time: Time,subject: Subject,failed_reasons:set|None=None,c
         else:
             reasons_num=0
         logging.debug(f"检查能否在 {clas} 的 {time} 安排 {subject}")
-        teacher=clas.get_teacher(subject)
-        if not merged and not teacher.check(time,subject,failed_reasons,conflict_lessons):
-            if failed_reasons is None:
-                return False
+        # 联合授课时这一节课要同时占用多位老师，任何一位有课都不能排
+        teachers=clas.get_teachers(subject)
+        if not merged:
+            for teacher in teachers:
+                if not teacher.check(time,subject,failed_reasons,conflict_lessons):
+                    if failed_reasons is None:
+                        return False
         if subject in clas.set_lessons:
             if failed_reasons is None:
                 return False
@@ -53,25 +58,28 @@ def check(clas: Class,time: Time,subject: Subject,failed_reasons:set|None=None,c
                             if failed_reasons is None:
                                 return False
                             failed_reasons.add(f"规则冲突：已经在 {", ".join([clas.name for clas in subjectA.timetable.get(time)])} 的 {time} 安排了与 {subject} 冲突的 {subjectA}")
-            # 老师不能与另一老师同一时间有课
+            # 老师不能与另一老师同一时间有课（联合授课时逐个老师判断）
             elif isinstance(rule,AvoidTeacherRule):
-                if teacher in rule.teachersA:
-                    for teacherB in rule.teachersB:
+                for teacher in teachers:
+                    if teacher in rule.teachersA:
+                        partners=rule.teachersB
+                    elif teacher in rule.teachersB:
+                        partners=rule.teachersA
+                    else:
+                        continue
+                    for teacherB in partners:
+                        if not teacherB or teacherB is teacher:
+                            continue
                         if teacherB.timetable.get(time):
                             if failed_reasons is None:
                                 return False
                             failed_reasons.add(f"规则冲突：{subject} 的教师 {teacher} 和 {teacherB} 在 {time} 会冲突")
-                elif teacher in rule.teachersB:
-                    for teacherA in rule.teachersA:
-                        if teacherA.timetable.get(time):
-                            if failed_reasons is None:
-                                return False
-                            failed_reasons.add(f"规则冲突：{subject} 的教师 {teacher} 和 {teacherA} 在 {time} 会冲突")
             elif isinstance(rule,TeacherAvoidTimeRule):
-                if teacher in rule.teachers and time in rule.times:
-                    if failed_reasons is None:
-                        return False
-                    failed_reasons.add(f"规则冲突：{subject} 的教师 {teacher} 不能在 {time} 排课")
+                for teacher in teachers:
+                    if teacher in rule.teachers and time in rule.times:
+                        if failed_reasons is None:
+                            return False
+                        failed_reasons.add(f"规则冲突：{subject} 的教师 {teacher} 不能在 {time} 排课")
             elif manual and isinstance(rule,SubjectOrderRule):
                 if subject not in rule.subjects:
                     continue
@@ -227,8 +235,9 @@ class GenerateThread(QThread):
             for clas in self.class_lst:
                 subject_total:dict[Subject,int]={}
                 for subject in clas.left_subjects:
-                    teacher=clas.get_teacher(subject)
-                    teacher_total[teacher]=teacher_total.get(teacher,0)+1
+                    # 联合授课的每位老师都要为这节课计入课时
+                    for teacher in clas.get_teachers(subject):
+                        teacher_total[teacher]=teacher_total.get(teacher,0)+1
                     subject_total[subject]=subject_total.get(subject,0)+1
                 self.subject_total[clas]=subject_total
             self.teacher_fair_load={teacher:max(total/5,1) for teacher,total in teacher_total.items()}
@@ -281,18 +290,20 @@ class GenerateThread(QThread):
             return day_load_cache[teacher]
 
         def _weight(subject:Subject)->float:
-            teacher=clas.get_teacher(subject)
+            teachers=clas.get_teachers(subject)
             left_num=clas.get_subject_left_num(subject)
             weight=0.0
             # 教师当天已排课时越接近（或超过）其日均课时，越往后放：
             # 前面的班级会先占满老师前几天的空档，若不在这里做均摊，
             # 后面班级的该老师就只剩周四周五可用，导致课程全部堆到周末
-            weight+=_get_day_load(teacher)/self.teacher_fair_load.get(teacher,1)*60
+            # 联合授课时取最忙的那位老师，任何一位排满了这节课都排不进去
+            if teachers:
+                weight+=max([_get_day_load(teacher)/self.teacher_fair_load.get(teacher,1) for teacher in teachers])*60
             # 该学科最近刚排过则往后放，距离越近权重越高
             if subject in recent_used:
                 weight+=30/(recent_used[subject]+1)
             # 减少连堂：该老师上一节已有课则往后放
-            if cfg.reduce_continue.value and teacher.is_busy(curr_time.prev):
+            if cfg.reduce_continue.value and any([teacher.is_busy(curr_time.prev) for teacher in teachers]):
                 weight+=15
             # 学科均摊：剩余课时多于剩余天数说明落后于进度，优先排
             if cfg.average_subjects.value and left_num>remaining_days:
