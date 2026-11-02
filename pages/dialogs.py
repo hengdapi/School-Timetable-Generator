@@ -11,7 +11,7 @@ from core.timetable_core import save_current_plan, delete_plans
 class PlanManagerMsgbox(MessageBoxBase):
     """整合保存/加载/删除课程表方案的操作对话框，模仿 MergeLessonsMsgbox 布局"""
 
-    def __init__(self, plan_time: str = "", curr_plan_name: str = "", parent=None):
+    def __init__(self, curr_plan_name: str = "", parent=None):
         super().__init__(parent=parent)
         self.action_taken = None  # 记录用户执行的操作："save"|"load"|"delete"|None
         self.action_plan_name = None  # 保存/删除的方案名称，供调用方读取结果
@@ -63,7 +63,6 @@ class PlanManagerMsgbox(MessageBoxBase):
         self.cancelButton.setIcon(FluentIcon.CLOSE)
 
         # 初始化当前方案名称
-        self.plan_time = plan_time
         self.curr_plan_name = curr_plan_name if curr_plan_name not in ("未保存", "无") else ""
         if self.curr_plan_name:
             self.name_input.setText(self.curr_plan_name)
@@ -123,7 +122,21 @@ class PlanManagerMsgbox(MessageBoxBase):
             return False
         plan_name = self.name_input.text()
         plan_desc = self.desc_input.text()
-        plan_time = self.plan_time or time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        # 覆盖已有方案前提醒，避免误把已保存的课表内容冲掉
+        if plan_name in cfg.timetable_plans.value:
+            old_plan = cfg.timetable_plans.value[plan_name]
+            dialog = MessageBox(
+                "确认覆盖方案？",
+                f"方案“{plan_name}”已存在（保存时间：{old_plan['time']}）\n"
+                f"描述：{old_plan['desc'] or '无'}\n"
+                "覆盖后该方案原有的课表将被当前课表替换，是否继续覆盖？",
+                self
+            )
+            if not dialog.exec():
+                Toast.info("已取消覆盖方案", f"方案“{plan_name}”保持不变", parent=self, duration=2000)
+                return False
+        # 保存时间取点击保存的时刻，保证列表中显示的是真实保存时间
+        plan_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         save_current_plan(plan_name, plan_desc, plan_time)
         self.refresh_plans_list()
         # 刷新会清空选中，按方案名重新选中，便于保存后直接加载/删除

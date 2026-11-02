@@ -1403,8 +1403,7 @@ class Generate(QFrame):
 
     def manage_plan(self):
         """统一管理课程表方案（保存、加载、删除）"""
-        plan_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        manage_msg = PlanManagerMsgbox(plan_time=plan_time, curr_plan_name=self.curr_plan.text()[5:], parent=self)
+        manage_msg = PlanManagerMsgbox(curr_plan_name=self.curr_plan.text()[5:], parent=self)
         if manage_msg.exec():
             action = manage_msg.action_taken
             if action == "save":
