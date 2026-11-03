@@ -40,7 +40,7 @@ class CheckUpdateThread(QThread):
             pass
         except Exception as err:
             e=traceback.format_exc()
-            logging.critical(f"检查更新出错：\n{e}")
+            logging.critical(f"检查更新出错：\n{e}\n返回内容：{response}")
             self.error.emit(str(err))
 
 class MarkdownBrowser(TextBrowser):

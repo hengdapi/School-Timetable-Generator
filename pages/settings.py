@@ -152,49 +152,6 @@ class RuleMessageBox(MessageBoxBase):
             settings_error(self,"新规则冲突、重复或不合法："+str(rule))
         return success
 
-class GradeMsgbox(MessageBoxBase):
-    def __init__(self,parent=None,edit=False,grade_name:str=""):
-        super().__init__(parent)
-        self.edit=edit
-        self.grade_name=grade_name
-        if self.edit:
-            self.classes=cfg.grades_info.value[grade_name]
-        subheader("添加年级" if not edit else "编辑年级",self,self.viewLayout)
-        write("年级名称：",self,self.viewLayout,0)
-        self.grade_name_input=LineEdit()
-        self.grade_name_input.setPlaceholderText("X年级")
-        if self.edit:
-            self.grade_name_input.setText(grade_name)
-        add_widget(self.grade_name_input,self.viewLayout)
-        write("所含班级：",self,self.viewLayout,0)
-        self.classes_combo=MultiSelectComboBox()
-        left_classes=set(lesson_info.class_names)
-        for classes in cfg.grades_info.value.values():
-            left_classes-=set(classes)
-        left_classes=list(left_classes)
-        if self.edit:
-            left_classes+=self.classes
-        left_classes.sort(key=lambda clas:lesson_info.class_names.index(clas))
-        self.classes_combo.addItems(left_classes)
-        if self.edit:
-            self.classes_combo.setSelectedIndices({left_classes.index(clas) for clas in self.classes})
-        add_widget(self.classes_combo,self.viewLayout)
-        self.yesButton.setText("添加年级")
-
-    def validate(self) -> bool:
-        curr_grade_name=self.grade_name_input.text()
-        if not curr_grade_name:
-            Toast.error("请输入年级名称","",parent=self,duration=2000)
-            return False
-        if not self.classes_combo.selectedItems():
-            Toast.error("请选择所含班级","",parent=self,duration=2000)
-            return False
-        grade_names=list(cfg.grades_info.value.keys())
-        if curr_grade_name!=self.grade_name and curr_grade_name in grade_names:
-            Toast.error("请勿设置名称重复的年级",f"名称“{curr_grade_name}”重复",parent=self,duration=2000)
-            return False
-        return True
-
 class MergeLessonsMsgbox(MessageBoxBase):
     def __init__(self,parent=None):
         super().__init__(parent)
@@ -315,85 +272,6 @@ class Settings(QFrame):
         # 只重建并课信息：重新解析整个课程信息会换掉所有班级对象，
         # 界面缓存的班级、已生成的课表、各规则引用的班级就全对不上了
         lesson_info.parse_merged_lessons()
-
-    def show_lessons_info(self):
-        lessons_info=pd.DataFrame(cfg.lessons_info.value)
-        display_df_in_table(self.lessons_info_table,lessons_info)
-
-    def download_template(self):
-        filename,_=QFileDialog.getSaveFileName(
-            self,
-            "保存课程信息模板",
-            "",
-            "Excel文件 (*.xlsx *.xls)"
-        )
-        if not filename:
-            return
-        shutil.copy("template.xlsx",filename)
-        os.startfile(filename)
-
-    def pick_lessons_info(self):
-        user_info_file,_=QFileDialog.getOpenFileName(
-            self,
-            "选择课程信息文件",
-            "",
-            "Excel文件 (*.xlsx *.xls)"
-        )
-        # 处理上传的课程信息文件或使用已有配置
-        if not user_info_file:
-            logging.debug("用户取消选择课程信息文件")
-            if cfg.lessons_info.value!="":
-                cfg.lessons_info.value=pd.DataFrame(cfg.lessons_info.value).to_json(orient="records", lines=False, force_ascii=False)
-            return
-        logging.info(f"选择课程信息文件: {user_info_file}")
-        try:
-            logging.debug("开始解析课程信息文件")
-            user_info=pd.read_excel(user_info_file)
-            old_classes=[]
-            rename_dict={}
-            for i in range(2,len(user_info.keys()),2):
-                rename_dict[user_info.keys()[i]]=user_info.keys()[i-1]+" - 任课老师"
-                rename_dict[user_info.keys()[i-1]]=user_info.keys()[i-1]+" - 课时"
-            user_info=user_info.rename(columns=rename_dict)
-            new_lessons_info=user_info.to_dict(orient="records")
-            for class_ in new_lessons_info:
-                old_classes.append(class_["班级"])
-                for key,value in class_.items():
-                    if pd.isna(value):
-                        class_[key]=None
-
-            new_subjects=[user_info.keys()[i][:-5] for i in range(1,len(user_info.keys()),2)]
-            new_teachers=set()
-            for subject in new_subjects:
-                # 一个单元格里可能填了多个老师（联合授课），要拆成多位老师
-                for cell in user_info[subject+" - 任课老师"].to_list():
-                    new_teachers|=set(split_teacher_names(cell))
-            new_teachers=[x for x in new_teachers if not pd.isna(x)]
-
-            logging.debug(f"解析完成：{len(old_classes)}个班级，{len(new_subjects)}个科目，{len(new_teachers)}个老师")
-            diff_classes,diff_teachers,diff_subjects=diff_cfg(old_classes,new_teachers,new_subjects)
-
-            if diff_classes or diff_teachers or diff_subjects:
-                logging.warning(f"检测到差异：{len(diff_classes)}个班级, {len(diff_teachers)}个老师, {len(diff_subjects)}个科目")
-
-            dialog=MessageBox("确认要更新课程信息表吗？","以下班级在新课程信息表中不存在：\n"+"、".join(diff_classes)+"\n以下老师在新课程信息表中不存在：\n"+"、".join(diff_teachers)+"\n以下科目在新课程信息表中不存在：\n"+"、".join(diff_subjects)+"\n与以上信息相关的设置将被删除",self)
-            if not dialog.exec():
-                logging.info("用户取消更新课程信息")
-                return
-
-            cfg.lessons_info.value=new_lessons_info
-            cfg.subjects_info.value=new_subjects
-            cfg.teachers_info.value=new_teachers
-            del_cfg_diff(diff_classes,diff_teachers,diff_subjects)
-            save_settings()
-            self.show_lessons_info()
-            logging.info("课程信息表更新成功，准备重启应用")
-            Toast.success("课程信息表更新成功，应用将自动重启","",parent=self,duration=1500)
-            restart_app(1500)
-        except Exception as error:
-            e=traceback.format_exc()
-            logging.error(f"解析课程信息文件时出错：\n{e}")
-            show_error(self,error)
 
     def enable_rule_button(self):
         self.edit_rule_button.setEnabled(True)
@@ -612,88 +490,6 @@ class Settings(QFrame):
         save_settings()
         logging.info("活动已按时间顺序重新排序")
 
-    def refresh_grade_button(self):
-        idx=list(cfg.grades_info.value.keys()).index(self.grade_table.item(self.grade_table.currentRow(),0).text())
-        self.edit_grade_button.setEnabled(bool(self.grade_table.selectedItems()))
-        self.del_grade_button.setEnabled(bool(self.grade_table.selectedItems()))
-        self.grade_up_button.setEnabled(bool(self.grade_table.selectedItems()) and idx!=0)
-        self.grade_down_button.setEnabled(bool(self.grade_table.selectedItems()) and idx!=len(cfg.grades_info.value)-1)
-
-    def show_grade_menu(self,pos):
-        """年段表格右键菜单：编辑、删除"""
-        item=self.grade_table.itemAt(pos)
-        if not item:
-            return
-        self.grade_table.setCurrentItem(item)
-        self.refresh_grade_button()
-        menu=RoundMenu(parent=self)
-        edit_action=Action(FluentIcon.EDIT,"编辑")
-        edit_action.triggered.connect(self.edit_grade)
-        menu.addAction(edit_action)
-        delete_action=Action(FluentIcon.DELETE,"删除")
-        delete_action.triggered.connect(self.del_grade)
-        menu.addAction(delete_action)
-        menu.exec(self.grade_table.viewport().mapToGlobal(pos),aniType=MenuAnimationType.DROP_DOWN)
-
-    def show_grades(self):
-        self.grade_table.setRowCount(len(cfg.grades_info.value))
-        self.grade_table.setFixedHeight(min(400,len(cfg.grades_info.value)*50+50))
-        r=0
-        for grade,classes in cfg.grades_info.value.items():
-            name_item=QTableWidgetItem(grade)
-            name_item.setTextAlignment(Qt.AlignCenter)
-            self.grade_table.setItem(r,0,name_item)
-            class_item=QTableWidgetItem(", ".join(classes))
-            class_item.setTextAlignment(Qt.AlignCenter)
-            self.grade_table.setItem(r,1,class_item)
-            r+=1
-
-    def add_grade(self):
-        add_grade_msgbox=GradeMsgbox(self)
-        if not add_grade_msgbox.exec():
-            return
-        cfg.grades_info.value[add_grade_msgbox.grade_name_input.text()]=[item.text for item in add_grade_msgbox.classes_combo.selectedItems()]
-        save_settings()
-        self.show_grades()
-
-    def edit_grade(self):
-        edit_grade_msgbox=GradeMsgbox(self,True,self.grade_table.item(self.grade_table.currentRow(),0).text())
-        if not edit_grade_msgbox.exec():
-            return
-        new_grade_info={}
-        for grade in cfg.grades_info.value:
-            if grade==self.grade_table.item(self.grade_table.currentRow(),0).text():
-                new_grade_info[edit_grade_msgbox.grade_name_input.text()]=[item.text for item in edit_grade_msgbox.classes_combo.selectedItems()]
-            else:
-                new_grade_info[grade]=cfg.grades_info.value[grade]
-        cfg.grades_info.value=new_grade_info
-        save_settings()
-        self.show_grades()
-        self.refresh_grade_button()
-
-    def del_grade(self):
-        cfg.grades_info.value.pop(self.grade_table.item(self.grade_table.currentRow(),0).text())
-        save_settings()
-        self.show_grades()
-        self.refresh_grade_button()
-
-    def change_grade_pos(self,drct:str):
-        new_grade_info={}
-        new_keys=list(cfg.grades_info.value.keys())
-        idx=new_keys.index(self.grade_table.item(self.grade_table.currentRow(),0).text())
-        if drct=="up":
-            new_keys[idx-1],new_keys[idx]=new_keys[idx],new_keys[idx-1]
-            self.grade_table.setCurrentIndex(self.grade_table.model().index(idx-1,0))
-        else:
-            new_keys[idx+1],new_keys[idx]=new_keys[idx],new_keys[idx+1]
-            self.grade_table.setCurrentIndex(self.grade_table.model().index(idx+1,0))
-        for grade in new_keys:
-            new_grade_info[grade]=cfg.grades_info.value[grade]
-        cfg.grades_info.value=new_grade_info
-        save_settings()
-        self.show_grades()
-        self.refresh_grade_button()
-
     def export_settings(self):
         filename,_=QFileDialog.getSaveFileName(self,"导出设置","","JSON 文件(*.json)")
         if not filename:
@@ -758,27 +554,8 @@ class Settings(QFrame):
             self.layout.addSpacing(20)
 
             add_widget(SeparatorWidget(orient=Qt.Horizontal),self.layout)
-            # 课程信息设置区域
-            biggersubheader("课程信息",self,self.layout)
-
-            # 上传课程信息文件
-            self.user_info_card=SettingCard(icon=FluentIcon.INFO,title="课程信息文件",content="存储任课老师及课时、班级信息的表格。同一格填多位老师（如“张三 李四”）即为联合授课")
-            add_widget(self.user_info_card,self.layout)
-            self.download_template_button=button("下载导入模板",self,self.user_info_card.layout())
-            self.download_template_button.setFixedSize(150,35)
-            self.download_template_button.setIcon(FluentIcon.DOWNLOAD)
-            self.download_template_button.clicked.connect(self.download_template)
-
-            self.user_info_file=button("选择文件",self,self.user_info_card.layout())
-            self.user_info_file.setFixedSize(130,35)
-            self.user_info_file.setIcon(FluentIcon.FOLDER)
-            self.user_info_file.clicked.connect(self.pick_lessons_info)
-
-            self.lessons_info_table=LineTableWidget()
-            self.show_lessons_info()
-            self.lessons_info_table.setFixedHeight(300)
-            self.lessons_info_table.setEditTriggers(TableWidget.NoEditTriggers)
-            add_widget(self.lessons_info_table,self.layout)
+            # 上课节次与时间设置区域（课程信息本身在“课程信息”页面管理）
+            biggersubheader("上课时间",self,self.layout)
 
             # 设置每天上午和下午的课程数量
             self.morning_class_num=RangeSettingCard(cfg.morning_class_num,FluentIcon.FLAG,title="每天上午上课数量",content="学校每天上午的上课数量")
@@ -797,56 +574,6 @@ class Settings(QFrame):
             add_widget(self.time_banner,self.layout)
             self.on_class_num_changed()
 
-            subheader("年级信息",self,self.layout)
-
-            grade_operations_layout=QHBoxLayout()
-            self.layout.addLayout(grade_operations_layout)
-
-            self.add_grade_button=button("添加年级",self,grade_operations_layout,0)
-            self.add_grade_button.setIcon(FluentIcon.ADD)
-            self.add_grade_button.setFixedWidth(200)
-            self.add_grade_button.clicked.connect(self.add_grade)
-
-            self.edit_grade_button=button("编辑年级",self,grade_operations_layout,0)
-            self.edit_grade_button.setIcon(FluentIcon.EDIT)
-            self.edit_grade_button.setFixedWidth(200)
-            self.edit_grade_button.setEnabled(False)
-            self.edit_grade_button.clicked.connect(self.edit_grade)
-
-            self.del_grade_button=button("删除年级",self,grade_operations_layout,50)
-            self.del_grade_button.setIcon(FluentIcon.DELETE)
-            self.del_grade_button.setFixedWidth(200)
-            self.del_grade_button.setEnabled(False)
-            self.del_grade_button.clicked.connect(self.del_grade)
-
-            self.grade_up_button=TransparentToolButton()
-            self.grade_up_button.setIcon(FluentIcon.UP)
-            self.grade_up_button.setToolTip("上移")
-            self.grade_up_button.setEnabled(False)
-            self.grade_up_button.clicked.connect(lambda :self.change_grade_pos("up"))
-            add_widget(self.grade_up_button,grade_operations_layout)
-
-            self.grade_down_button=TransparentToolButton()
-            self.grade_down_button.setIcon(FluentIcon.DOWN)
-            self.grade_down_button.setToolTip("下移")
-            self.grade_down_button.setEnabled(False)
-            self.grade_down_button.clicked.connect(lambda :self.change_grade_pos("down"))
-            add_widget(self.grade_down_button,grade_operations_layout)
-
-            self.grade_table=LineTableWidget()
-            self.grade_table.setColumnCount(2)
-            self.grade_table.setHorizontalHeaderLabels(["年级名称","所含班级"])
-            self.grade_table.setColumnWidth(1,1000)
-            self.grade_table.verticalHeader().hide()
-            self.grade_table.setEditTriggers(TableWidget.NoEditTriggers)
-            self.grade_table.clicked.connect(self.refresh_grade_button)
-            self.grade_table.itemDoubleClicked.connect(self.edit_grade)
-            self.grade_table.setContextMenuPolicy(Qt.CustomContextMenu)
-            self.grade_table.customContextMenuRequested.connect(self.show_grade_menu)
-            self.show_grades()
-            add_widget(self.grade_table,self.layout)
-
-            grade_operations_layout.addStretch(1)
             add_widget(SeparatorWidget(orient=Qt.Horizontal),self.layout)
 
             # 生成规则设置区域
