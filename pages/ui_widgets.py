@@ -1,19 +1,32 @@
 """
-课程表拖拽相关的自定义组件。
+页面通用组件与逻辑。
 
+拖拽相关：
 - TimeTableWidget        课程表预览的表格（支持表格内拖拽 + 接收从暂存区拖来的课程）
 - LessonStoragePane      暂存区容器（接收从表格拖来的课程）
 - DraggableLessonCard    暂存区的可拖拽卡片（支持点击/拖拽激活课表高亮）
+
+页面级：
 - WarningBanner          常驻在页面中的多行警告横幅
+- FontTableWidget        可调整单元格字体的表格
+- PagedPage              顶部导航 + 堆叠分页的页面基类
+- show_item_menu         表格 / 列表的“编辑 + 删除”右键菜单
+- log_page_error         页面加载异常的统一处理
+- slide_to_page          分页切换动画
 """
 from typing import Optional,Iterable
 
-from PySide6.QtCore import QMimeData,QPoint
+from PySide6.QtCore import (
+    QAbstractAnimation,QEasingCurve,QMimeData,QParallelAnimationGroup,QPoint,
+    QPropertyAnimation
+)
 from PySide6.QtGui import (
     QDropEvent,QDragMoveEvent,QDragEnterEvent,QPixmap,QPainter,QBrush,
     QDrag
 )
 from qfluentwidgets_pro.components.date_time.picker_base import SeparatorWidget
+from qfluentwidgets_pro.components.navigation import TopNavigationBar
+from qfluentwidgets_pro.window.stacked_widget import StackedWidget
 
 from locals import *
 from style import *
@@ -746,3 +759,222 @@ class TimeMultiSelectionCombobox(MultiSelectionTreeComboBox):
 
     def checkedTimes(self) -> list[Time]:
         return [Time(string=time_str) for time_str in self.checkedTexts()]
+
+
+# =====================================================================
+# 分页切换动画
+# =====================================================================
+def slide_to_page(view,index:int,duration:int=300):
+    """
+    水平翻页动画：当前页朝一侧滑出，目标页从相反的一侧滑入。
+
+    参数
+    ----
+    view: PopUpAniStackedWidget
+        即 ``StackedWidget.view``（顶部导航分页用的堆叠容器）
+    index: int
+        目标分页下标
+    duration: int
+        动画时长（毫秒）
+
+    库自带的过渡只能二选一（只滑出旧页或只滑入新页），这里用一个并行动画组
+    同时做两件事，切换完成后才真正切换堆叠页并把所有分页位置复位：
+    - 向后翻：旧页向左滑出，新页从右侧滑入
+    - 向前翻：旧页向右滑出，新页从左侧滑入
+    """
+    if index<0 or index>=view.count() or index==view.currentIndex():
+        return
+
+    # 上一次动画还没播完就先把它收尾，避免两个动画同时改位置
+    running=getattr(view,"_slideGroup",None)
+    if running is not None and running.state()==QAbstractAnimation.State.Running:
+        running.stop()
+        handler=getattr(running,"slideFinishHandler",None)
+        if handler is not None:
+            handler()
+
+    current=view.currentIndex()
+    old=view.widget(current)
+    new=view.widget(index)
+    offset=view.width() if view.width()>0 else max(old.width(),600)
+    direction=-1 if index>current else 1  # 旧页滑出的方向：-1 向左，1 向右
+
+    old.move(0,0)
+    # 非当前页的几何不会被 QStackedLayout 更新，尺寸还停在默认值，
+    # 直接显示会让内容缩成一团，所以先按堆叠区大小铺开再挪到另一侧
+    new.resize(view.size())
+    new.move(-direction*offset,0)
+    new.setVisible(True)
+    old.raise_()
+
+    group=QParallelAnimationGroup(view)
+
+    old_ani=QPropertyAnimation(old,b"pos",group)
+    old_ani.setDuration(duration)
+    old_ani.setStartValue(QPoint(0,0))
+    old_ani.setEndValue(QPoint(direction*offset,0))
+    old_ani.setEasingCurve(QEasingCurve.Type.OutCubic)
+    group.addAnimation(old_ani)
+
+    new_ani=QPropertyAnimation(new,b"pos",group)
+    new_ani.setDuration(duration)
+    new_ani.setStartValue(QPoint(-direction*offset,0))
+    new_ani.setEndValue(QPoint(0,0))
+    new_ani.setEasingCurve(QEasingCurve.Type.OutCubic)
+    group.addAnimation(new_ani)
+
+    finished={"done":False}
+
+    def finish():
+        """动画结束（或被新的切换打断）时真正切页并复位位置"""
+        if finished["done"]:
+            return
+        finished["done"]=True
+        enabled=view.isAnimationEnabled
+        view.setAnimationEnabled(False)
+        view.setCurrentIndex(index)
+        view.setAnimationEnabled(enabled)
+        for i in range(view.count()):
+            view.widget(i).move(0,0)
+        if getattr(view,"_slideGroup",None) is group:
+            view._slideGroup=None
+        group.deleteLater()
+
+    group.slideFinishHandler=finish
+    view._slideGroup=group
+    group.finished.connect(finish)
+    group.start()
+
+
+# =====================================================================
+# 分页页面基类
+# =====================================================================
+class PagedPage(QFrame):
+    """顶部导航 + 堆叠分页的页面基类。
+
+    子类在 ``__init__`` 里传入 objectName 调用 :meth:`__init__`，之后：
+
+    * 用 :meth:`add_page` 把各分页挂到顶部导航上（内容过高时可上下滚动）；
+    * 用 :meth:`switch_page` 切到默认分页；
+    * 用 :meth:`create_page` 创建“标题 + 说明文字”的分页容器。
+
+    objectName 会派生出堆叠容器的样式名（``<objectName>StackedWidget``），
+    这样透明背景的 QSS 才能命中它。
+    """
+
+    def __init__(self,parent=None,objectName:str=""):
+        super().__init__(parent=parent)
+        self.setObjectName(objectName)
+        # 分页：routeKey -> 页面控件（外层滚动容器）
+        self.page_widgets={}
+        self.current_route=""
+        self._nav_ready=False
+
+        self.main_layout=QVBoxLayout(self)
+        self.main_layout.setContentsMargins(10,10,10,10)
+
+        # 顶部分页导航
+        self.nav_bar=TopNavigationBar(self)
+        self.main_layout.addWidget(self.nav_bar)
+
+        self.stacked_widget=StackedWidget(self)
+        # StackedWidget 本质是 QFrame，必须按 objectName 匹配才能命中样式
+        self.stacked_widget.setObjectName(f"{objectName}StackedWidget")
+        self.stacked_widget.setStyleSheet(f"#{objectName}StackedWidget{{background: transparent; border: none}}")
+        self.stacked_widget.setContentsMargins(20,10,0,0)
+        self.main_layout.addWidget(self.stacked_widget,1)
+
+    # ------------------------------------------------------------------
+    # 分页
+    # ------------------------------------------------------------------
+    def add_page(self,route_key:str,icon,text:str,page:QWidget):
+        """把一页挂到顶部导航与堆叠容器上（内容过高时可上下滚动）"""
+        scroll=SingleDirectionScrollArea(orient=Qt.Vertical)
+        scroll.setStyleSheet("QScrollArea{background: transparent; border: none}")
+        scroll.setWidgetResizable(True)
+        page.setStyleSheet("QWidget{background: transparent}")
+        scroll.setWidget(page)
+
+        self.nav_bar.addItem(route_key,icon,text,onClick=lambda:self.switch_page(route_key),expanded=True)
+        self.stacked_widget.addWidget(scroll)
+        self.page_widgets[route_key]=scroll
+
+    def switch_page(self,route_key:str):
+        page=self.page_widgets.get(route_key)
+        if page is None:
+            return
+        index=self.stacked_widget.indexOf(page)
+        self.current_route=route_key
+        if index!=self.stacked_widget.currentIndex():
+            if isinstance(page,QAbstractScrollArea):
+                page.verticalScrollBar().setValue(0)
+            # 旧页朝一侧滑出，新页从另一侧滑入
+            slide_to_page(self.stacked_widget.view,index)
+        # 点击导航时指示条已由控件自己更新，这里补上程序化切换的情况
+        if self._nav_ready:
+            self.nav_bar.setCurrentItem(route_key)
+
+    def showEvent(self,event):
+        super().showEvent(event)
+        # 控件真正显示出来之后，导航指示条才能定位到正确的分页上
+        if not self._nav_ready and self.current_route:
+            self._nav_ready=True
+            self.nav_bar.setCurrentItem(self.current_route)
+
+    @staticmethod
+    def create_page(title_text:str,desc:str="")->tuple[QWidget,QVBoxLayout]:
+        """创建一页：标题 + 说明文字"""
+        page=QWidget()
+        layout=QVBoxLayout(page)
+        # 底部留一点边距，内容不会紧贴窗口边缘
+        layout.setContentsMargins(0,12,0,16)
+        subheader(title_text,page,layout,10)
+        if desc:
+            label=write(desc,page,layout,10)
+            label.setWordWrap(True)
+        return page,layout
+
+
+# =====================================================================
+# 页面通用小工具
+# =====================================================================
+def show_item_menu(item_view,pos,parent=None,edit_text:str="编辑",edit_slot=None,delete_slot=None,on_selected=None)->bool:
+    """在表格 / 列表的某项上弹出“编辑 + 删除”右键菜单。
+
+    :param item_view: ``QTableWidget`` / ``QListWidget`` 等条目视图
+    :param pos: 相对 ``item_view`` 的鼠标位置
+    :param parent: 菜单的父控件（一般传页面自身）
+    :param edit_text: 编辑项的文字，如“编辑”“重命名”
+    :param edit_slot: 编辑项的回调；传 ``None`` 则不显示该项
+    :param delete_slot: 删除项的回调；传 ``None`` 则不显示该项
+    :param on_selected: 菜单弹出前的回调，通常用于刷新按钮状态
+    :return: 是否弹出了菜单（鼠标位置下没有条目时返回 ``False``）
+    """
+    item=item_view.itemAt(pos)
+    if item is None:
+        return False
+
+    item_view.setCurrentItem(item)
+    if on_selected is not None:
+        on_selected()
+
+    menu=RoundMenu(parent=parent or item_view)
+
+    if edit_slot is not None:
+        edit_action=Action(FluentIcon.EDIT,edit_text)
+        edit_action.triggered.connect(edit_slot)
+        menu.addAction(edit_action)
+
+    if delete_slot is not None:
+        delete_action=Action(FluentIcon.DELETE,"删除")
+        delete_action.triggered.connect(delete_slot)
+        menu.addAction(delete_action)
+
+    menu.exec(item_view.viewport().mapToGlobal(pos),aniType=MenuAnimationType.DROP_DOWN)
+    return True
+
+
+def log_page_error(page,error:Exception,title:str="页面"):
+    """页面加载异常的统一处理：完整堆栈写日志，并在页面上弹出错误提示"""
+    logging.critical(f"加载{title}出错：\n{traceback.format_exc()}")
+    show_error(page,error)

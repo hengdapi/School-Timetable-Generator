@@ -104,9 +104,6 @@ class Generate(QFrame):
         view.setStyleSheet("QWidget{background: transparent}")
         self.layout = QVBoxLayout(view)
 
-        self.title = title("生成",self,self.layout,10)
-        self.title.setFixedHeight(60)
-
         self.operation_layout=QHBoxLayout()
         self.layout.addLayout(self.operation_layout)
         # 生成课程表按钮
@@ -466,37 +463,57 @@ class Generate(QFrame):
                 self.timetable_preview.setColumnWidth(col,110)
 
     def update_teacher_pane_sizes(self):
-        """教师课表尺寸：1~2 位老师时标题和表格撑满窗格，3 位及以上改成固定行高 + 滚动
+        """教师课表尺寸：
+        - 1~2 位老师：每张课表占窗格的一半高度（1 位时下半部分留空）
+        - 3 位及以上：固定 40px 行高，整体滚动
 
-        撑满模式下表格随面板高度伸缩、行高自动均分，不会在表格上方留出大片空白；
+        半格模式下标题不参与拉伸、表格高度按半格精确计算，行高随表格自动均分；
         老师多到放不下时才切成滚动模式，保证每张课表都能完整看到、又不会被压扁。
         """
         visible_panes=[(pane_subheader,pane_table) for pane_subheader,pane_table in self.teacher_panes
                        if not pane_table.isHidden()]
-        fill_mode=len(visible_panes)<=2
+        half_mode=len(visible_panes)<=2
+        layout=self.teacher_timetable_layout
         for pane_subheader,pane_table in self.teacher_panes:
             # 标题只占自身高度，不要把多出来的空间都吸走（否则表格上方会有一大片空白）
             pane_subheader.setSizePolicy(QSizePolicy.Preferred,QSizePolicy.Fixed)
-            pane_table.setSizePolicy(QSizePolicy.Expanding,QSizePolicy.Expanding if fill_mode else QSizePolicy.Fixed)
-        if fill_mode:
+            pane_table.setSizePolicy(QSizePolicy.Expanding,QSizePolicy.Fixed)
+        if half_mode:
+            # 每位老师占窗格的一半高度：1 位时另外半格由 stretch 占着，
+            # 2 位时两格之间还有一条间距，要先把间距扣掉才能正好铺满
+            pane_height=self.teacher_scroll.viewport().height() or self.teacher_timetable_pane.height()
+            label_height=visible_panes[0][0].sizeHint().height() if visible_panes else 27
+            pane_count=max(1,len(visible_panes))
+            if pane_count==1:
+                block_height=pane_height//2
+            else:
+                block_height=(pane_height-layout.spacing()*(pane_count-1))//pane_count
+            table_height=max(60,block_height-label_height-layout.spacing())
             for pane_subheader,pane_table in visible_panes:
                 pane_table.setMinimumHeight(0)
                 pane_table.setMaximumHeight(16777215)
-                # 行高随表格高度均分，正好把窗格撑满
+                # 行高随表格高度均分
                 pane_table.verticalHeader().setSectionResizeMode(QHeaderView.Stretch)
+                pane_table.setFixedHeight(table_height)
         else:
             for pane_subheader,pane_table in visible_panes:
                 pane_table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
                 for row in range(pane_table.rowCount()):
                     pane_table.setRowHeight(row,40)
                 pane_table.setFixedHeight(max(pane_table.horizontalHeader().height(),15)+pane_table.rowCount()*40+4)
-        # 撑满模式内容高度跟随视口，滚动模式把内容撑到实际需要的高度，滚动条才会出现
+        # 末尾的 stretch：只有 1 位老师时才要（占住另一半窗格，课表贴顶），其余情况去掉
+        last_index=layout.count()-1
+        if last_index>=0 and layout.itemAt(last_index).spacerItem() is not None:
+            layout.takeAt(last_index)
+        if half_mode and len(visible_panes)==1:
+            layout.addStretch(1)
+        # 半格模式内容高度跟随视口，滚动模式把内容撑到实际需要的高度，滚动条才会出现
         content=self.teacher_scroll.widget()
-        if fill_mode:
+        if half_mode:
             content.setMinimumHeight(0)
         else:
-            self.teacher_timetable_layout.activate()
-            content.setMinimumHeight(self.teacher_timetable_layout.minimumSize().height())
+            layout.activate()
+            content.setMinimumHeight(layout.minimumSize().height())
 
     def on_splitter_moved(self):
         cfg.preview_splitter_state.value=bytes(self.preview_splitter.saveState().toBase64()).decode()

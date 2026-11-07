@@ -10,7 +10,6 @@ from PySide6.QtGui import QTextDocument,QImage
 from packaging import version
 
 from locals import app_version,gitcode_url,show_error
-from qfluentwidgets_pro import TextBrowser,MessageBoxBase
 from style import *
 
 
@@ -40,7 +39,7 @@ class CheckUpdateThread(QThread):
             pass
         except Exception as err:
             e=traceback.format_exc()
-            logging.critical(f"检查更新出错：\n{e}\n返回内容：{response}")
+            logging.critical(f"检查更新出错：\n{e}")
             self.error.emit(str(err))
 
 class MarkdownBrowser(TextBrowser):

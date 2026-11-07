@@ -160,6 +160,45 @@ def getIconColor(theme=Theme.AUTO, reverse=False):
     return color
 
 
+# 缓存已经按颜色改写好的 SVG 渲染器：(svg 路径, 改写的属性, 填色的 path 下标) -> QSvgRenderer
+_svgRendererCache = {}
+
+
+def _svgRendererKey(iconPath: str, indexes, attributes: dict) -> tuple:
+    """生成缓存键：属性值统一转成字符串，避免 QColor 等对象哈希不一致"""
+    return (
+        iconPath,
+        tuple(indexes) if indexes else None,
+        tuple((name, str(value)) for name, value in sorted(attributes.items())),
+    )
+
+
+def getSvgRenderer(iconPath: str, indexes=None, **attributes) -> QSvgRenderer:
+    """拿到图标对应的 QSvgRenderer
+
+    直接调用 writeSvg + QSvgRenderer 每次都要读文件、解析 XML 再改写文本，
+    单次约 0.4ms；列表、按钮这类每帧重绘图标的场景会明显拖慢绘制，所以缓存起来。
+    """
+    # 颜色统一写成 #RRGGBB 字符串：既能作为缓存键，也是 QDomElement 与 SVG 能接受的写法
+    attributes = {
+        name: value.name() if isinstance(value, QColor) else value
+        for name, value in attributes.items()
+    }
+    key = _svgRendererKey(iconPath, indexes, attributes)
+    renderer = _svgRendererCache.get(key)
+
+    if renderer is None:
+        # 颜色组合有限，超过上限直接清空重建即可，不会无限增长
+        if len(_svgRendererCache) > 512:
+            _svgRendererCache.clear()
+
+        data = writeSvg(iconPath, indexes, **attributes).encode() if attributes else iconPath
+        renderer = QSvgRenderer(data)
+        _svgRendererCache[key] = renderer
+
+    return renderer
+
+
 def drawSvgIcon(icon, painter, rect):
     """draw svg icon
 
@@ -333,10 +372,7 @@ class FluentIconBase:
         icon = self.path(theme)
 
         if icon.endswith(".svg"):
-            if attributes:
-                icon = writeSvg(icon, indexes, **attributes).encode()
-
-            drawSvgIcon(icon, painter, rect)
+            getSvgRenderer(icon, indexes, **attributes).render(painter, QRectF(rect))
         else:
             icon = QIcon(icon)
             rect = QRectF(rect).toRect()
@@ -481,8 +517,7 @@ class ColoredFluentIcon(FluentIconBase):
             color = self.darkColor if theme == Theme.DARK else self.lightColor
 
         attributes.update(fill=color.name())
-        icon = writeSvg(icon, indexes, **attributes).encode()
-        drawSvgIcon(icon, painter, rect)
+        getSvgRenderer(icon, indexes, **attributes).render(painter, QRectF(rect))
 
 
 class FluentIcon(FluentIconBase, Enum):

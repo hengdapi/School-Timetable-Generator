@@ -152,107 +152,69 @@ class RuleMessageBox(MessageBoxBase):
             settings_error(self,"新规则冲突、重复或不合法："+str(rule))
         return success
 
+def merge_key(merged_lesson)->tuple:
+    """统一成 (学科, 班级元组)，避免元组 / 列表两种存法比较不上"""
+    return merged_lesson[0],tuple(merged_lesson[1])
+
+
 class MergeLessonsMsgbox(MessageBoxBase):
-    def __init__(self,parent=None):
+    """添加 / 编辑一组并课：班级可多选，学科单选"""
+
+    def __init__(self,parent=None,edit=False,merged_lesson:tuple=None):
         super().__init__(parent)
-        subheader("设置并课",self,self.viewLayout)
-        self.merged_lessons_list=RoundListWidget()
-        self.merged_lessons_list.currentItemChanged.connect(self.on_list_selected)
-        self.merged_lessons_list.clicked.connect(self.refresh_button_states)
-        self.viewLayout.addWidget(self.merged_lessons_list)
-        self.operation_layout=QGridLayout()
-        self.operation_layout.setColumnStretch(1,1)
-        self.operation_layout.addWidget(write("并课班级：",self,QVBoxLayout()),0,0)
-        self.operation_layout.addWidget(write("并课学科：",self,QVBoxLayout()),1,0)
+        self.origin_merged=merged_lesson
+        self.new_merged=None
+        subheader("编辑并课" if edit else "添加并课",self,self.viewLayout)
+
+        self.form_layout=QGridLayout()
+        self.form_layout.setColumnStretch(1,1)
+        self.form_layout.addWidget(write("并课班级：",self,QVBoxLayout()),0,0)
         self.class_combo=ClassMultiSelectionCombobox()
-        self.class_combo.setMaximumWidth(400)
-        self.operation_layout.addWidget(self.class_combo,0,1)
+        self.class_combo.setMinimumWidth(400)
+        self.form_layout.addWidget(self.class_combo,0,1)
+        self.form_layout.addWidget(write("并课学科：",self,QVBoxLayout()),1,0)
         self.subject_combo=ComboBox()
-        self.subject_combo.setMaximumWidth(400)
+        self.subject_combo.setMinimumWidth(400)
         self.subject_combo.addItems(lesson_info.subject_names)
-        self.operation_layout.addWidget(self.subject_combo,1,1)
-        self.viewLayout.addLayout(self.operation_layout)
+        self.form_layout.addWidget(self.subject_combo,1,1)
+        self.viewLayout.addLayout(self.form_layout)
 
-        self.yesButton.setText("添加并课")
-        self.yesButton.setIcon(FluentIcon.ADD)
-        self.editButton=PushButton("编辑并课")
-        self.editButton.setIcon(FluentIcon.EDIT)
-        self.editButton.clicked.connect(self.edit_lesson)
-        self.buttonLayout.insertWidget(1,self.editButton)
-        self.deleteButton=PushButton("删除并课")
-        self.deleteButton.setIcon(FluentIcon.DELETE)
-        self.deleteButton.clicked.connect(self.del_lesson)
-        self.buttonLayout.insertWidget(2,self.deleteButton)
-        self.cancelButton.setText("设置完成")
-        self.cancelButton.setIcon(FluentIcon.CLOSE)
-        self.refresh_lessons_list()
+        if merged_lesson:
+            self.subject_combo.setCurrentText(merged_lesson[0])
+            self.class_combo.setCheckedTexts(merged_lesson[1])
 
-    def refresh_button_states(self):
-        self.editButton.setEnabled(bool(self.merged_lessons_list.selectedItems()))
-        self.deleteButton.setEnabled(bool(self.merged_lessons_list.selectedItems()))
-
-    def refresh_lessons_list(self):
-        self.merged_lessons_list.clear()
-        self.merged_lessons_list.setFixedHeight(min(275,len(cfg.merged_lessons.value)*50))
-        for merged_lesson in cfg.merged_lessons.value:
-            item=QListWidgetItem(f"{", ".join(merged_lesson[1])} 的 {merged_lesson[0]} 学科并课")
-            item.setData(Qt.UserRole,merged_lesson)
-            self.merged_lessons_list.addItem(item)
-        self.refresh_button_states()
+        self.yesButton.setText("编辑并课" if edit else "添加并课")
+        self.cancelButton.setText("取消")
 
     def check(self):
-        if len(self.class_combo.checkedClasses())<2:
+        classes=self.class_combo.checkedTexts()
+        subject=self.subject_combo.currentText()
+        if len(classes)<2:
             Toast.error("请选择至少2个并课班级","",parent=self,duration=2000)
             return False
-        if not self.subject_combo.currentText():
+        if not subject:
             Toast.error("请选择并课学科","",parent=self,duration=2000)
             return False
-        if (self.subject_combo.currentText(),self.class_combo.checkedTexts()) in cfg.merged_lessons.value:
-            Toast.error("该组并课设置已存在","",parent=self,duration=2000)
-            return False
+        new_key=(subject,tuple(classes))
+        origin_key=merge_key(self.origin_merged) if self.origin_merged else None
         for merged_lesson in cfg.merged_lessons.value:
-            if merged_lesson[0]==self.subject_combo.currentText() and set(merged_lesson[1])&set(self.class_combo.checkedTexts()):
+            key=merge_key(merged_lesson)
+            if key==origin_key:
+                continue
+            if key==new_key:
+                Toast.error("该组并课设置已存在","",parent=self,duration=2000)
+                return False
+            if key[0]==subject and set(key[1])&set(classes):
                 Toast.error("并课设置冲突",f"与并课设置“{", ".join(merged_lesson[1])} 的 {merged_lesson[0]} 学科并课”冲突",parent=self,duration=-1)
                 return False
+        self.new_merged=(subject,classes)
         return True
 
     def validate(self) -> bool:
-        if not self.check():
-            return False
-        cfg.merged_lessons.value.append((self.subject_combo.currentText(),self.class_combo.checkedTexts()))
-        save_settings()
-        self.refresh_lessons_list()
-        return False
+        return self.check()
 
-    def on_list_selected(self,item:QListWidgetItem):
-        if not item:
-            return
-        merged_lesson=item.data(Qt.UserRole)
-        self.subject_combo.setCurrentText(merged_lesson[0])
-        self.class_combo.setCheckedTexts(merged_lesson[1])
-        self.refresh_button_states()
 
-    def del_lesson(self):
-        if not self.merged_lessons_list.selectedItems():
-            return
-        selected_item=self.merged_lessons_list.selectedItems()[0]
-        cfg.merged_lessons.value.remove(selected_item.data(Qt.UserRole))
-        save_settings()
-        self.refresh_lessons_list()
-
-    def edit_lesson(self):
-        if not self.merged_lessons_list.selectedItems() or not self.check():
-            return
-        selected_item=self.merged_lessons_list.selectedItems()[0]
-        idx=cfg.merged_lessons.value.index(selected_item.data(Qt.UserRole))
-        cfg.merged_lessons.value.remove(selected_item.data(Qt.UserRole))
-        cfg.merged_lessons.value.insert(idx,(self.subject_combo.currentText(),self.class_combo.checkedTexts()))
-        save_settings()
-        self.refresh_lessons_list()
-        # 刷新后行号重新映射，按原位置重新选中，保持编辑焦点
-        self.merged_lessons_list.setCurrentRow(idx)
-
-class Settings(QFrame):
+class Settings(PagedPage):
     def save_cfg(self,attr:str,value):
         setattr(getattr(cfg,attr),"value",value)
         save_settings()
@@ -267,11 +229,80 @@ class Settings(QFrame):
         # 新增课次的起止时间默认为空，需要重新校验并提示
         self.refresh_time_warnings()
 
-    def merge_lessons(self):
-        MergeLessonsMsgbox(self).exec()
+    # ------------------------------------------------------------------
+    # 并课设置
+    # ------------------------------------------------------------------
+    def refresh_merge_list(self):
+        self.merge_list.clear()
+        for merged_lesson in cfg.merged_lessons.value:
+            item=QListWidgetItem(f"{", ".join(merged_lesson[1])} 的 {merged_lesson[0]} 学科并课")
+            item.setData(Qt.UserRole,merged_lesson)
+            self.merge_list.addItem(item)
+        self.enable_merge_button()
+
+    def enable_merge_button(self):
+        selected=bool(self.merge_list.selectedItems())
+        self.edit_merge_button.setEnabled(selected)
+        self.del_merge_button.setEnabled(selected)
+
+    def save_merged_lessons(self):
+        save_settings()
         # 只重建并课信息：重新解析整个课程信息会换掉所有班级对象，
         # 界面缓存的班级、已生成的课表、各规则引用的班级就全对不上了
         lesson_info.parse_merged_lessons()
+        self.refresh_merge_list()
+
+    def add_merge(self):
+        logging.info("用户点击添加并课按钮")
+        dialog=MergeLessonsMsgbox(self)
+        if dialog.exec():
+            cfg.merged_lessons.value.append(dialog.new_merged)
+            self.save_merged_lessons()
+            logging.info("成功添加并课")
+        else:
+            logging.debug("用户取消添加并课")
+
+    def edit_merge(self):
+        if not self.merge_list.selectedItems():
+            return
+        logging.info("用户编辑并课")
+        selected_item=self.merge_list.selectedItems()[0]
+        old_merged=selected_item.data(Qt.UserRole)
+        dialog=MergeLessonsMsgbox(self,True,old_merged)
+        if not dialog.exec():
+            logging.debug("用户取消编辑并课")
+            return
+        index=self.merge_list.row(selected_item)
+        old_key=merge_key(old_merged)
+        for i,merged_lesson in enumerate(cfg.merged_lessons.value):
+            if merge_key(merged_lesson)==old_key:
+                cfg.merged_lessons.value[i]=dialog.new_merged
+                break
+        self.save_merged_lessons()
+        # 刷新后行号重新映射，按原位置重新选中，保持编辑焦点
+        if 0<=index<self.merge_list.count():
+            self.merge_list.setCurrentRow(index)
+        logging.info("并课编辑成功")
+
+    def del_merge(self):
+        if not self.merge_list.selectedItems():
+            return
+        logging.info("用户删除并课")
+        target_key=merge_key(self.merge_list.selectedItems()[0].data(Qt.UserRole))
+        for i,merged_lesson in enumerate(cfg.merged_lessons.value):
+            if merge_key(merged_lesson)==target_key:
+                del cfg.merged_lessons.value[i]
+                break
+        self.save_merged_lessons()
+        logging.info("并课删除成功")
+
+    def show_merge_menu(self,pos):
+        """并课列表右键菜单：编辑、删除"""
+        show_item_menu(
+            self.merge_list,pos,self,
+            edit_text="编辑",edit_slot=self.edit_merge,delete_slot=self.del_merge,
+            on_selected=self.enable_merge_button
+        )
 
     def enable_rule_button(self):
         self.edit_rule_button.setEnabled(True)
@@ -344,19 +375,11 @@ class Settings(QFrame):
 
     def show_rule_menu(self,pos):
         """规则列表右键菜单：编辑、删除"""
-        item=self.rule_list.itemAt(pos)
-        if not item:
-            return
-        self.rule_list.setCurrentItem(item)
-        self.enable_rule_button()
-        menu=RoundMenu(parent=self)
-        edit_action=Action(FluentIcon.EDIT,"编辑")
-        edit_action.triggered.connect(self.edit_rule)
-        menu.addAction(edit_action)
-        delete_action=Action(FluentIcon.DELETE,"删除")
-        delete_action.triggered.connect(self.del_rule)
-        menu.addAction(delete_action)
-        menu.exec(self.rule_list.viewport().mapToGlobal(pos),aniType=MenuAnimationType.DROP_DOWN)
+        show_item_menu(
+            self.rule_list,pos,self,
+            edit_text="编辑",edit_slot=self.edit_rule,delete_slot=self.del_rule,
+            on_selected=self.enable_rule_button
+        )
 
     def on_drag_rules(self):
         new_rules=[]
@@ -372,24 +395,6 @@ class Settings(QFrame):
 
         # 重新应用规则，同步 lesson_info.rules 及各班级的规则数据
         apply_rules()
-
-    def open_timeline_editor(self):
-        """打开时间段活动编辑窗口（独立窗口）"""
-        if self.timeline_window is None:
-            self.timeline_window=TimelineEditor(self.window())
-            self.timeline_window.destroyed.connect(self.on_timeline_window_closed)
-            # 时间轴里改完时间后同步刷新本页的时间冲突提示
-            self.timeline_window.dataChanged.connect(self.on_timeline_data_changed)
-        self.timeline_window.show()
-        self.timeline_window.raise_()
-        self.timeline_window.activateWindow()
-
-    def on_timeline_window_closed(self):
-        self.timeline_window=None
-
-    def on_timeline_data_changed(self):
-        """时间段编辑窗口里的时间被修改，同步刷新本页的时间冲突提示"""
-        self.refresh_time_warnings()
 
     @staticmethod
     def format_clock(time:list[int])->str:
@@ -516,152 +521,197 @@ class Settings(QFrame):
 
     def __init__(self,parent=None):
         try:
-            super().__init__(parent=parent)
+            # 顶部导航、堆叠分页与 add_page / switch_page / create_page 都在基类里
+            super().__init__(parent=parent,objectName="Settings")
             logging.info("开始加载设置页面")
-            self.setObjectName("Settings")
-            # 课程/活动时间合法性警告横幅，在构建对应区域时创建
+            # 课程/活动时间合法性警告横幅，在“上课时间”分页中创建
             self.time_banner=None
-            # 时间段编辑独立窗口（避免被垃圾回收，关闭后自动置空）
-            self.timeline_window=None
-            main_layout=QVBoxLayout(self)
-            main_layout.setContentsMargins(20,20,0,0)
 
-            self.scroll_area=SingleDirectionScrollArea(orient=Qt.Vertical)
-            self.scroll_area.setStyleSheet("QScrollArea{background: transparent; border: none}")
-            self.scroll_area.setWidgetResizable(True)
+            self.add_page("time",FluentIcon.DATE_TIME,"课程数量",self.build_time_page())
+            self.add_page("timeline",FluentIcon.CALENDAR,"活动时间",self.build_timeline_page())
+            self.add_page("rule",FluentIcon.EDUCATION,"排课规则",self.build_rule_page())
+            self.add_page("merge",FluentIcon.BOOK_SHELF,"并课设置",self.build_merge_page())
+            self.add_page("feature",FluentIcon.DEVELOPER_TOOLS,"功能设置",self.build_feature_page())
+            self.add_page("style",FluentIcon.FONT,"表格样式",self.build_style_page())
+            self.add_page("io",FluentIcon.SHARE,"导出/导入",self.build_io_page())
 
-            view=QWidget()
-            view.setStyleSheet("QWidget{background: transparent}")
-            self.layout = QVBoxLayout(view)
-
-            self.title = title("设置",self,self.layout)
-
-            biggersubheader("导出/导入",self,self.layout)
-            settingio_layout=QHBoxLayout()
-
-            self.export_setting_button=button("导出设置",self,settingio_layout)
-            self.export_setting_button.setFixedSize(130,40)
-            self.export_setting_button.setIcon(FluentIcon.SHARE)
-            self.export_setting_button.clicked.connect(self.export_settings)
-
-            self.import_setting_button=button("导入设置",self,settingio_layout)
-            self.import_setting_button.setFixedSize(130,40)
-            self.import_setting_button.setIcon(FluentIcon.DOWNLOAD)
-            self.import_setting_button.clicked.connect(self.import_settings)
-
-            settingio_layout.addStretch(1)
-            self.layout.addLayout(settingio_layout)
-            self.layout.addSpacing(20)
-
-            add_widget(SeparatorWidget(orient=Qt.Horizontal),self.layout)
-            # 上课节次与时间设置区域（课程信息本身在“课程信息”页面管理）
-            biggersubheader("上课时间",self,self.layout)
-
-            # 设置每天上午和下午的课程数量
-            self.morning_class_num=RangeSettingCard(cfg.morning_class_num,FluentIcon.FLAG,title="每天上午上课数量",content="学校每天上午的上课数量")
-            self.morning_class_num.valueChanged.connect(lambda :self.on_class_num_changed("morning"))
-            add_widget(self.morning_class_num,self.layout,0)
-            self.afternoon_class_num=RangeSettingCard(cfg.afternoon_class_num,FluentIcon.FLAG,title="每天下午上课数量",content="学校每天下午的上课数量")
-            self.afternoon_class_num.valueChanged.connect(lambda :self.on_class_num_changed("afternoon"))
-            add_widget(self.afternoon_class_num,self.layout,0)
-
-            self.lesson_time_card=PushSettingCard("设置",FluentIcon.DATE_TIME,"活动起止时间","设置每天各节课和其他活动的起止时间")
-            self.lesson_time_card.clicked.connect(self.open_timeline_editor)
-            add_widget(self.lesson_time_card,self.layout,0)
-
-            # 课程与活动时间冲突的警告横幅（显示在“课程起止时间”卡片下方）
-            self.time_banner=WarningBanner(self)
-            add_widget(self.time_banner,self.layout)
-            self.on_class_num_changed()
-
-            add_widget(SeparatorWidget(orient=Qt.Horizontal),self.layout)
-
-            # 生成规则设置区域
-            biggersubheader("生成规则",self,self.layout)
-
-            rule_list_layout=QHBoxLayout()
-            self.layout.addLayout(rule_list_layout)
-
-            self.add_rule_button=button("添加规则",self,rule_list_layout,0)
-            self.add_rule_button.setIcon(FluentIcon.ADD)
-            self.add_rule_button.setFixedWidth(200)
-            self.add_rule_button.clicked.connect(self.add_rule)
-
-            self.edit_rule_button=button("编辑规则",self,rule_list_layout,0)
-            self.edit_rule_button.setEnabled(False)
-            self.edit_rule_button.setIcon(FluentIcon.EDIT)
-            self.edit_rule_button.setFixedWidth(200)
-            self.edit_rule_button.clicked.connect(self.edit_rule)
-
-            self.del_rule_button=button("删除规则",self,rule_list_layout)
-            self.del_rule_button.setEnabled(False)
-            self.del_rule_button.setIcon(FluentIcon.DELETE)
-            self.del_rule_button.setFixedWidth(200)
-            self.del_rule_button.clicked.connect(self.del_rule)
-            rule_list_layout.addStretch(1)
-
-            self.rule_list=RoundListWidget()
-            self.rule_list.setFixedHeight(230)
-            self.rule_list.setDragEnabled(True)
-            self.rule_list.setDropIndicatorShown(True)
-            self.rule_list.setDragDropMode(QAbstractItemView.InternalMove)
-            self.rule_list.itemClicked.connect(self.enable_rule_button)
-            self.rule_list.itemDoubleClicked.connect(self.edit_rule)
-            self.rule_list.setContextMenuPolicy(Qt.CustomContextMenu)
-            self.rule_list.customContextMenuRequested.connect(self.show_rule_menu)
-            self.rule_list.model().rowsMoved.connect(self.on_drag_rules)
-            self.show_rules()
-            add_widget(self.rule_list,self.layout)
-
-            subheader("生成功能设置",self,self.layout)
-            self.reduce_continue_card=SwitchSettingCard(FluentIcon.STOP_WATCH,"减少教师连堂","生成时尽可能避免教师连堂上课",cfg.reduce_continue)
-            add_widget(self.reduce_continue_card,self.layout,0)
-            self.average_subjects_card=SwitchSettingCard(FluentIcon.SPEED_MEDIUM,"平均分配课程","生成时尽量将学科平均分配到每一天（在不违背生成规则的前提下）",cfg.average_subjects)
-            add_widget(self.average_subjects_card,self.layout,0)
-            self.forbid_noon_continuous_card=SwitchSettingCard(FluentIcon.CALENDAR,"允许跨上下午连堂","允许将连堂课排在上午最后一节和下午第一节",cfg.allow_noon_continuous)
-            add_widget(self.forbid_noon_continuous_card,self.layout,0)
-            self.merge_lessons_group=PushSettingCard("设置",FluentIcon.BOOK_SHELF,"并课设置","设置哪些班级哪些学科要排在同一时间")
-            self.merge_lessons_group.clicked.connect(self.merge_lessons)
-            add_widget(self.merge_lessons_group,self.layout,0)
-            self.max_tries_card=RangeSettingCard(cfg.max_tries,FluentIcon.CANCEL,"最大尝试次数","设置自动生成时同一时间最多尝试生成多少次，如果在尝试次数内无法生成出完全满足规则的课表，则会跳过该时间，并把剩余课程放在暂存区中")
-            add_widget(self.max_tries_card,self.layout)
-
-            add_widget(SeparatorWidget(orient=Qt.Horizontal),self.layout)
-
-            # 表格样式设置区域
-            biggersubheader("表格样式",self,self.layout)
-
-            self.school_name_card=SettingCard(FluentIcon.INFO,"学校名称","设置学校名称（作为表头）")
-            self.school_name=LineEdit()
-            self.school_name.setText(cfg.school_name.value)
-            add_widget(self.school_name,self.school_name_card.hBoxLayout)
-            self.school_name.textChanged.connect(lambda :self.save_cfg("school_name",self.school_name.text()))
-            add_widget(self.school_name_card,self.layout,0)
-
-            # 设置是否显示教师姓名和表格排版方式
-            show_teachers=SwitchSettingCard(configItem=cfg.show_teachers,icon=FluentIcon.TAG,title="显示教师姓名",content="在课程名称下方标注任课教师姓名")
-            add_widget(show_teachers,self.layout,0)
-
-            text_style=SettingCard(FluentIcon.FONT,"文字样式","设置课程表文字样式")
-            self.font_combo=FontComboBox()
-            self.font_combo.setCurrentText(cfg.text_font.value)
-            self.font_combo.currentTextChanged.connect(lambda :self.save_cfg("text_font",self.font_combo.currentText()))
-            add_widget(self.font_combo,text_style.hBoxLayout)
-
-            self.text_size=SpinBox()
-            self.text_size.setRange(1,100)
-            self.text_size.setValue(cfg.text_size.value)
-            self.text_size.valueChanged.connect(lambda :self.save_cfg("text_size",self.text_size.value()))
-            add_widget(self.text_size,text_style.hBoxLayout)
-            add_widget(text_style,self.layout)
-
+            self.switch_page("time")
             # 校验课程与活动时间，需要时显示警告横幅
             self.refresh_time_warnings()
-
-            self.scroll_area.setWidget(view)
-            main_layout.addWidget(self.scroll_area)
             logging.info("设置页面加载完成")
         except Exception as error:
-            e=traceback.format_exc()
-            logging.critical(f"加载设置页面出错：\n{e}")
-            show_error(self,error)
+            log_page_error(self,error,"设置页面")
+
+    # ------------------------------------------------------------------
+    # 各分页内容
+    # ------------------------------------------------------------------
+    def build_time_page(self)->QWidget:
+        page,layout=self.create_page("课程数量","设置每天上午、下午的课程数量；各节课与活动的起止时间在“活动时间”页调整。")
+
+        # 设置每天上午和下午的课程数量
+        self.morning_class_num=RangeSettingCard(cfg.morning_class_num,FluentIcon.FLAG,title="每天上午上课数量",content="学校每天上午的上课数量")
+        self.morning_class_num.valueChanged.connect(lambda :self.on_class_num_changed("morning"))
+        add_widget(self.morning_class_num,layout,0)
+        self.afternoon_class_num=RangeSettingCard(cfg.afternoon_class_num,FluentIcon.FLAG,title="每天下午上课数量",content="学校每天下午的上课数量")
+        self.afternoon_class_num.valueChanged.connect(lambda :self.on_class_num_changed("afternoon"))
+        add_widget(self.afternoon_class_num,layout,0)
+
+        # 课程与活动时间冲突的警告横幅
+        self.time_banner=WarningBanner(page)
+        add_widget(self.time_banner,layout)
+        self.on_class_num_changed()
+
+        layout.addStretch(1)
+        return page
+
+    def build_timeline_page(self)->QWidget:
+        page,layout=self.create_page("活动时间","拖动时间块可调整课程与活动的起止时间，双击时间块可精确编辑。")
+        self.timeline_editor=TimelineEditor(page)
+        # 时间被修改后同步刷新“上课时间”页的时间冲突提示
+        self.timeline_editor.dataChanged.connect(self.refresh_time_warnings)
+        layout.addWidget(self.timeline_editor,1)
+        return page
+
+    def build_rule_page(self)->QWidget:
+        page,layout=self.create_page("排课规则","规则按列表顺序参与生成，越靠前的规则越先生效，可拖动调整先后。")
+
+        rule_list_layout=QHBoxLayout()
+        layout.addLayout(rule_list_layout)
+
+        self.add_rule_button=button("添加规则",page,rule_list_layout,0)
+        self.add_rule_button.setIcon(FluentIcon.ADD)
+        self.add_rule_button.setFixedWidth(200)
+        self.add_rule_button.clicked.connect(self.add_rule)
+
+        self.edit_rule_button=button("编辑规则",page,rule_list_layout,0)
+        self.edit_rule_button.setEnabled(False)
+        self.edit_rule_button.setIcon(FluentIcon.EDIT)
+        self.edit_rule_button.setFixedWidth(200)
+        self.edit_rule_button.clicked.connect(self.edit_rule)
+
+        self.del_rule_button=button("删除规则",page,rule_list_layout)
+        self.del_rule_button.setEnabled(False)
+        self.del_rule_button.setIcon(FluentIcon.DELETE)
+        self.del_rule_button.setFixedWidth(200)
+        self.del_rule_button.clicked.connect(self.del_rule)
+        rule_list_layout.addStretch(1)
+
+        self.rule_list=RoundListWidget()
+        self.rule_list.setDragEnabled(True)
+        self.rule_list.setDropIndicatorShown(True)
+        self.rule_list.setDragDropMode(QAbstractItemView.InternalMove)
+        self.rule_list.itemClicked.connect(self.enable_rule_button)
+        self.rule_list.itemDoubleClicked.connect(self.edit_rule)
+        self.rule_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.rule_list.customContextMenuRequested.connect(self.show_rule_menu)
+        self.rule_list.model().rowsMoved.connect(self.on_drag_rules)
+        self.show_rules()
+        add_widget(self.rule_list,layout)
+
+        return page
+
+    def build_merge_page(self)->QWidget:
+        page,layout=self.create_page("并课设置","并课的班级会在同一时间上同学科的课程，适合两个班一起上课；调课时并课班级的课程会一起调整。")
+
+        merge_operations_layout=QHBoxLayout()
+        layout.addLayout(merge_operations_layout)
+
+        self.add_merge_button=button("添加并课",page,merge_operations_layout,0)
+        self.add_merge_button.setIcon(FluentIcon.ADD)
+        self.add_merge_button.setFixedWidth(200)
+        self.add_merge_button.clicked.connect(self.add_merge)
+
+        self.edit_merge_button=button("编辑并课",page,merge_operations_layout,0)
+        self.edit_merge_button.setIcon(FluentIcon.EDIT)
+        self.edit_merge_button.setFixedWidth(200)
+        self.edit_merge_button.setEnabled(False)
+        self.edit_merge_button.clicked.connect(self.edit_merge)
+
+        self.del_merge_button=button("删除并课",page,merge_operations_layout)
+        self.del_merge_button.setIcon(FluentIcon.DELETE)
+        self.del_merge_button.setFixedWidth(200)
+        self.del_merge_button.setEnabled(False)
+        self.del_merge_button.clicked.connect(self.del_merge)
+        merge_operations_layout.addStretch(1)
+
+        self.merge_list=RoundListWidget()
+        self.merge_list.itemClicked.connect(self.enable_merge_button)
+        self.merge_list.itemDoubleClicked.connect(self.edit_merge)
+        self.merge_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.merge_list.customContextMenuRequested.connect(self.show_merge_menu)
+        self.refresh_merge_list()
+        add_widget(self.merge_list,layout)
+
+        return page
+
+    def build_feature_page(self)->QWidget:
+        page,layout=self.create_page("功能设置","")
+
+        self.reduce_continue_card=SwitchSettingCard(FluentIcon.STOP_WATCH,"减少教师连堂","生成时尽可能避免教师连堂上课",cfg.reduce_continue)
+        add_widget(self.reduce_continue_card,layout,0)
+        self.average_subjects_card=SwitchSettingCard(FluentIcon.SPEED_MEDIUM,"平均分配课程","生成时尽量将学科平均分配到每一天（在不违背生成规则的前提下）",cfg.average_subjects)
+        add_widget(self.average_subjects_card,layout,0)
+        self.forbid_noon_continuous_card=SwitchSettingCard(FluentIcon.CALENDAR,"允许跨上下午连堂","允许将连堂课排在上午最后一节和下午第一节",cfg.allow_noon_continuous)
+        add_widget(self.forbid_noon_continuous_card,layout,0)
+        self.max_tries_card=RangeSettingCard(cfg.max_tries,FluentIcon.CANCEL,"最大尝试次数","设置自动生成时同一时间最多尝试生成多少次，如果在尝试次数内无法生成出完全满足规则的课表，则会跳过该时间，并把剩余课程放在暂存区中")
+        add_widget(self.max_tries_card,layout)
+
+        layout.addStretch(1)
+        return page
+
+    def build_style_page(self)->QWidget:
+        page,layout=self.create_page("表格样式","设置课程表的表头文字与文字样式。")
+
+        self.school_name_card=SettingCard(FluentIcon.INFO,"学校名称","设置学校名称（作为表头）")
+        self.school_name=LineEdit()
+        self.school_name.setText(cfg.school_name.value)
+        add_widget(self.school_name,self.school_name_card.hBoxLayout)
+        self.school_name.textChanged.connect(lambda :self.save_cfg("school_name",self.school_name.text()))
+        add_widget(self.school_name_card,layout,0)
+
+        # 设置是否显示教师姓名和表格排版方式
+        show_teachers=SwitchSettingCard(configItem=cfg.show_teachers,icon=FluentIcon.TAG,title="显示教师姓名",content="在课程名称下方标注任课教师姓名")
+        add_widget(show_teachers,layout,0)
+
+        text_style=SettingCard(FluentIcon.FONT,"文字样式","设置课程表文字样式")
+        self.font_combo=FontComboBox()
+        self.font_combo.setCurrentText(cfg.text_font.value)
+        self.font_combo.currentTextChanged.connect(lambda :self.save_cfg("text_font",self.font_combo.currentText()))
+        add_widget(self.font_combo,text_style.hBoxLayout)
+
+        self.text_size=SpinBox()
+        self.text_size.setRange(1,100)
+        self.text_size.setValue(cfg.text_size.value)
+        self.text_size.valueChanged.connect(lambda :self.save_cfg("text_size",self.text_size.value()))
+        add_widget(self.text_size,text_style.hBoxLayout)
+        add_widget(text_style,layout)
+
+        layout.addStretch(1)
+        return page
+
+    def build_io_page(self)->QWidget:
+        page,layout=self.create_page("导出/导入","把本机的排课设置备份到别处，或从备份文件恢复。")
+
+        settingio_layout=QHBoxLayout()
+        self.export_setting_button=button("导出设置",page,settingio_layout)
+        self.export_setting_button.setFixedSize(130,40)
+        self.export_setting_button.setIcon(FluentIcon.SHARE)
+        self.export_setting_button.clicked.connect(self.export_settings)
+
+        self.import_setting_button=button("导入设置",page,settingio_layout)
+        self.import_setting_button.setFixedSize(130,40)
+        self.import_setting_button.setIcon(FluentIcon.DOWNLOAD)
+        self.import_setting_button.clicked.connect(self.import_settings)
+        settingio_layout.addStretch(1)
+        layout.addLayout(settingio_layout)
+        layout.addSpacing(10)
+
+        self.io_card=CardWidget(page)
+        io_layout=QVBoxLayout(self.io_card)
+        io_layout.setContentsMargins(20,16,20,16)
+        subheader("设置文件包含什么",self.io_card,io_layout,10)
+        write("settings.json 里保存着课程信息（班级、学科、任课老师）、年级、排课规则、功能开关与表格样式。",self.io_card,io_layout,0)
+        add_widget(self.io_card,layout)
+
+        layout.addStretch(1)
+        return page

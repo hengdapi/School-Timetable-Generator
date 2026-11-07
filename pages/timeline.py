@@ -1,7 +1,7 @@
 # coding=utf-8
-"""时间段活动编辑窗口。
+"""时间段活动编辑页。
 
-以独立窗口的形式，把“课程起止时间”与“活动信息”统一放到一条时间轴上编辑：
+把“课程起止时间”与“活动信息”统一放到一条时间轴上编辑，作为设置页的一个分页：
 
 - 蓝色块 = 课程（对应 cfg.lessons_time）
 - 橙色块 = 活动（对应 cfg.activity_info）
@@ -15,13 +15,13 @@ import logging
 
 from PySide6.QtCore import QRect, QRectF, QSize, Qt, QTime, Signal
 from PySide6.QtGui import (
-    QColor, QFont, QFontMetrics, QIcon, QKeySequence, QPainter, QPen, QShortcut
+    QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPen, QShortcut
 )
 from PySide6.QtWidgets import (
     QAbstractSpinBox, QApplication, QHBoxLayout, QLabel, QLineEdit,
     QListWidgetItem, QPlainTextEdit, QTextEdit, QVBoxLayout, QWidget
 )
-from qfluentwidgets_pro import Action, FluentWidget, MenuAnimationType, RoundMenu
+from qfluentwidgets_pro import Action, MenuAnimationType, RoundMenu
 
 from pages.ui_widgets import *
 
@@ -43,7 +43,6 @@ MIN_DURATION = 5
 # 本窗口统一使用的字号（主窗口整体字号偏大，这里单独调小以保持协调）
 UI_FONT = QFont("Microsoft YaHei", 12)        # 正文 / 控件
 SUBTITLE_FONT = QFont("Microsoft YaHei", 15)  # 小标题
-TITLE_FONT = QFont("Microsoft YaHei", 22)     # 页面大标题
 # 时间轴内部文字（块里空间有限，用更小的字号）
 TIMELINE_AXIS_FONT = QFont("Microsoft YaHei", 10)          # 左侧刻度
 TIMELINE_NAME_FONT = QFont("Microsoft YaHei", 10, QFont.Bold)  # 块内名称
@@ -440,37 +439,25 @@ class TimelineCanvas(QWidget):
 
 
 # =====================================================================
-# 独立窗口
 # =====================================================================
-class TimelineEditor(FluentWidget):
-    """时间段活动编辑窗口（独立窗口，非子页面）"""
+# 时间设置页
+# =====================================================================
+class TimelineEditor(QWidget):
+    """课程与活动时间编辑页：左侧列表 + 右侧时间轴，嵌在“活动时间”分页里"""
 
     dataChanged = Signal()  # 时间配置被修改
 
     def __init__(self, parent=None):
         super().__init__(parent=parent)
-        # 即使指定了父窗口也要作为独立窗口显示
-        if parent is not None:
-            self.setWindowFlag(Qt.Window, True)
         self.setObjectName("TimelineEditor")
-        self.setWindowTitle("活动时间设置")
-        self.setWindowIcon(QIcon("logo.ico"))
         self.setFont(UI_FONT)
-        self.setAttribute(Qt.WA_DeleteOnClose)
-        self.resize(1000, 760)
-        self._center(parent)
 
         self.blocks: list[TimeBlock] = []
         self._list_lock = False
 
-        # 内容区域（放在标题栏下方）
-        content = QWidget(self)
-        main_layout = QVBoxLayout(content)
-        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0,0,0,0)
         main_layout.setSpacing(0)
-
-        self.title = label("活动时间设置", LargeTitleLabel, TITLE_FONT, content, main_layout, 10)
-        self.title.setFixedHeight(46)
 
         # 顶部设置卡片
         header = QHBoxLayout()
@@ -489,7 +476,7 @@ class TimelineEditor(FluentWidget):
         header.addWidget(self.range_card)
 
         # 冲突提示横幅
-        self.banner = WarningBanner(content)
+        self.banner = WarningBanner(self)
         main_layout.addWidget(self.banner)
         main_layout.addSpacing(10)
 
@@ -553,8 +540,9 @@ class TimelineEditor(FluentWidget):
         self.canvas.customContextMenuRequested.connect(self.on_canvas_context_menu)
         self.scroll.setWidget(self.canvas)
 
-        # Delete 键删除选中的活动
+        # Delete 键删除选中的活动；只在焦点位于本页内时生效
         self.delete_shortcut = QShortcut(QKeySequence(QKeySequence.Delete), self)
+        self.delete_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
         self.delete_shortcut.activated.connect(self.on_delete_shortcut)
         right_layout.addWidget(self.scroll, 1)
 
@@ -573,27 +561,7 @@ class TimelineEditor(FluentWidget):
         self.zoom_slider.valueChanged.connect(self.on_zoom_changed)
         bottom.addWidget(self.zoom_slider)
 
-        window_layout = QVBoxLayout(self)
-        window_layout.setContentsMargins(0, self.titleBar.height(), 0, 0)
-        window_layout.setSpacing(0)
-        window_layout.addWidget(content)
-        self.titleBar.raise_()
-
         self.reload()
-
-    def _center(self, parent=None):
-        """把窗口居中显示（默认相对父窗口，没有父窗口则相对屏幕）"""
-        try:
-            if isinstance(parent, QWidget):
-                geometry = parent.frameGeometry()
-            else:
-                screen = self.screen() or QApplication.primaryScreen()
-                if screen is None:
-                    return
-                geometry = screen.availableGeometry()
-            self.move(geometry.center() - self.rect().center())
-        except Exception:
-            pass
 
     # ---------------------------------------------------------------
     # 构建与刷新
@@ -799,7 +767,7 @@ class TimelineEditor(FluentWidget):
 
     def edit_block(self, block: TimeBlock):
         try:
-            msgbox = BlockEditMsgbox(block, self)
+            msgbox = BlockEditMsgbox(block, self.window())
             if not msgbox.exec():
                 return
             name, start, end = msgbox.result
@@ -913,10 +881,10 @@ class TimelineEditor(FluentWidget):
     # 顶部卡片
     # ---------------------------------------------------------------
     def set_default_duration(self):
-        DefaultDurationMsgbox(self).exec()
+        DefaultDurationMsgbox(self.window()).exec()
 
     def set_timeline_range(self):
-        if TimelineRangeMsgbox(self).exec():
+        if TimelineRangeMsgbox(self.window()).exec():
             self.canvas.refresh_range(*self.compute_range())
 
     # ---------------------------------------------------------------

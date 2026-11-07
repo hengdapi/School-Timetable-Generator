@@ -65,7 +65,7 @@ class Window(MSFluentWindow):
 
         self.addSubInterface(self.home,FluentIcon.HOME,"主页")
         self.addSubInterface(self.classes,FluentIcon.INFO,"课程信息")
-        self.addSubInterface(self.settings,FluentIcon.SETTING,"设置")
+        self.addSubInterface(self.settings,FluentIcon.SETTING,"排课设置")
         self.addSubInterface(self.generate,FluentIcon.BRUSH,"生成")
         logging.debug("已添加所有子页面")
 

@@ -10,15 +10,29 @@
 """
 import shutil
 
+from PySide6.QtCore import QTimer
+from PySide6.QtGui import QColor
+
 from locals import *
-from pages.ui_widgets import WarningBanner
-from qfluentwidgets_pro.components.date_time.picker_base import SeparatorWidget
+from pages.ui_widgets import PagedPage,WarningBanner,log_page_error,show_item_menu
 
 # 没有归入任何年级的班级在界面上的显示名
 UNGRADED="（未归入年级）"
 # 班级对话框里各列的固定宽度（表头与内容行共用）
 SUBJECT_COLUMN_WIDTH=180
 HOURS_COLUMN_WIDTH=175
+
+
+class FillWidthImageLabel(ImageLabel):
+    """宽度跟随父容器、高度按原图比例自动变化的图片标签"""
+
+    def resizeEvent(self,event):
+        super().resizeEvent(event)
+        if self.image.isNull():
+            return
+        height=round(self.width()*self.image.height()/self.image.width())
+        if self.height()!=height:
+            self.setFixedHeight(height)
 
 
 # =====================================================================
@@ -351,11 +365,6 @@ class SubjectRow(QWidget):
         self.hours_spin.setValue(int(hours))
         layout.addWidget(self.hours_spin)
 
-        self.delete_button=TransparentToolButton()
-        self.delete_button.setIcon(FluentIcon.DELETE)
-        self.delete_button.setToolTip("删除该学科")
-        layout.addWidget(self.delete_button)
-
     def subject(self)->str:
         return self.subject_name
 
@@ -424,18 +433,38 @@ class ClassMsgbox(MessageBoxBase):
         self.rows=[]
 
         subheader("添加班级" if not edit else "编辑班级",self,self.viewLayout)
-        write("班级名称：",self,self.viewLayout,0)
+
+        # 班级名称：标签在左、输入框在右
+        name_layout=QHBoxLayout()
+        name_layout.setSpacing(8)
+        self.name_label=BodyLabel()
+        self.name_label.setFont(fonts.write)
+        self.name_label.setText("班级名称：")
+        name_layout.addWidget(self.name_label,0,Qt.AlignVCenter)
         self.name_input=LineEdit()
         self.name_input.setPlaceholderText("X年级X班")
         if edit:
             self.name_input.setText(class_name)
-        add_widget(self.name_input,self.viewLayout,0)
+        name_layout.addWidget(self.name_input,1)
+        self.viewLayout.addLayout(name_layout)
 
-        write("所属年级：",self,self.viewLayout,0)
+        # 所属年级：同样标签在左、下拉框在右
+        grade_layout=QHBoxLayout()
+        grade_layout.setSpacing(8)
+        self.grade_label=BodyLabel()
+        self.grade_label.setFont(fonts.write)
+        self.grade_label.setText("所属年级：")
+        grade_layout.addWidget(self.grade_label,0,Qt.AlignVCenter)
         self.grade_combo=ComboBox()
         self.grade_combo.addItems(list((cfg.grades_info.value or {}).keys())+[UNGRADED])
         self.grade_combo.setCurrentText(class_grade(class_name) if edit else UNGRADED)
-        add_widget(self.grade_combo,self.viewLayout,0)
+        grade_layout.addWidget(self.grade_combo,1)
+        self.viewLayout.addLayout(grade_layout)
+
+        # 两个标签等宽，输入框和下拉框的起始位置才对得齐
+        label_width=max(self.name_label.sizeHint().width(),self.grade_label.sizeHint().width())
+        self.name_label.setFixedWidth(label_width)
+        self.grade_label.setFixedWidth(label_width)
 
         # 学科列表的表头
         header_layout=QHBoxLayout()
@@ -451,7 +480,6 @@ class ClassMsgbox(MessageBoxBase):
                 header_layout.addWidget(label)
             else:
                 header_layout.addWidget(label,1)
-        header_layout.addSpacing(30)
         self.viewLayout.addLayout(header_layout)
 
         # 学科行（可滚动）
@@ -469,28 +497,42 @@ class ClassMsgbox(MessageBoxBase):
         self.rows_area.setWidget(rows_view)
         add_widget(self.rows_area,self.viewLayout,0)
 
-        # 添加学科
+        # 对话框整体带 QGraphicsDropShadowEffect（高斯模糊阴影），内容里任何一处重绘
+        # 都会让 Qt 把整个对话框重新渲染到离屏图像再模糊一次，滚动学科列表时每帧都
+        # 要付这笔开销（实测单帧 CPU 50ms 以上，帧率 20 出头）。这里在滚动期间先摘掉
+        # 阴影、停下 200ms 后再装回去：阴影叠在暗色遮罩上本来就不明显，摘掉后单帧
+        # CPU 降到 15ms 左右，帧率可以到 60 以上。
+        self.shadow_restore_timer=QTimer(self)
+        self.shadow_restore_timer.setSingleShot(True)
+        self.shadow_restore_timer.setInterval(200)
+        self.shadow_restore_timer.timeout.connect(self.restore_shadow)
+        self.rows_area.verticalScrollBar().valueChanged.connect(self.drop_shadow)
+
+        # 添加学科：输入框 + 按钮
         add_subject_layout=QHBoxLayout()
+        self.new_subject_input=LineEdit()
+        self.new_subject_input.setPlaceholderText("输入学科名称，回车或点击右侧按钮添加一行")
+        self.new_subject_input.returnPressed.connect(self.add_subject)
+        add_widget(self.new_subject_input,add_subject_layout,0)
         self.add_subject_button=PushButton()
         self.add_subject_button.setText("添加学科")
         self.add_subject_button.setIcon(FluentIcon.ADD)
-        self.add_subject_button.clicked.connect(self.pick_subject)
-        add_widget(self.add_subject_button,add_subject_layout)
-        add_subject_layout.addStretch(1)
+        self.add_subject_button.clicked.connect(self.add_subject)
+        add_widget(self.add_subject_button,add_subject_layout,0)
         self.viewLayout.addLayout(add_subject_layout)
 
-        # 新增老师（同时加入所有学科行的候选项）
-        new_teacher_layout=QHBoxLayout()
+        # 新增教师：输入框 + 按钮
+        add_teacher_layout=QHBoxLayout()
         self.new_teacher_input=LineEdit()
-        self.new_teacher_input.setPlaceholderText("新增老师：输入姓名后回车或点击右侧按钮")
-        self.new_teacher_input.returnPressed.connect(self.add_new_teacher)
-        add_widget(self.new_teacher_input,new_teacher_layout,0)
-        self.new_teacher_button=PushButton()
-        self.new_teacher_button.setText("新增教师")
-        self.new_teacher_button.setIcon(FluentIcon.PEOPLE)
-        self.new_teacher_button.clicked.connect(self.add_new_teacher)
-        add_widget(self.new_teacher_button,new_teacher_layout)
-        self.viewLayout.addLayout(new_teacher_layout)
+        self.new_teacher_input.setPlaceholderText("输入教师姓名，回车或点击右侧按钮加入候选项")
+        self.new_teacher_input.returnPressed.connect(self.add_teacher)
+        add_widget(self.new_teacher_input,add_teacher_layout,0)
+        self.add_teacher_button=PushButton()
+        self.add_teacher_button.setText("新增教师")
+        self.add_teacher_button.setIcon(FluentIcon.PEOPLE)
+        self.add_teacher_button.clicked.connect(self.add_teacher)
+        add_widget(self.add_teacher_button,add_teacher_layout,0)
+        self.viewLayout.addLayout(add_teacher_layout)
 
         self.yesButton.setText("添加班级" if not edit else "保存修改")
         self.cancelButton.setText("取消")
@@ -508,40 +550,51 @@ class ClassMsgbox(MessageBoxBase):
     # ------------------------------------------------------------------
     def add_row(self,subject:str,teacher_names:list[str]|None=None,hours:int=0)->SubjectRow:
         row=SubjectRow(subject,self.teachers,teacher_names,hours)
-        row.delete_button.clicked.connect(lambda:self.remove_row(row))
         self.rows.append(row)
         # 保持在末尾的伸缩项之前
         self.rows_layout.insertWidget(self.rows_layout.count()-1,row)
         return row
 
-    def pick_subject(self):
-        """学科以只读文字显示，新增学科时先询问学科名称"""
-        used=[row.subject() for row in self.rows if row.subject()]
-        msgbox=SubjectNameMsgbox(self,self.subjects,used)
-        if not msgbox.exec():
+    def add_subject(self):
+        """新增学科：把输入框里的学科名加到最后一行"""
+        name=self.new_subject_input.text().strip()
+        if not name:
+            Toast.error("请输入学科名称","",parent=self,duration=2000)
             return
-        self.add_row(msgbox.subject_input.text().strip())
+        if name in [row.subject() for row in self.rows]:
+            Toast.error("学科重复",f"“{name}”已经在列表里了",parent=self,duration=3000)
+            return
+        self.add_row(name)
+        self.new_subject_input.clear()
 
-    def remove_row(self,row:SubjectRow):
-        if row in self.rows:
-            self.rows.remove(row)
-        self.rows_layout.removeWidget(row)
-        row.setParent(None)
-        row.deleteLater()
-
-    def add_new_teacher(self):
+    def add_teacher(self):
+        """新增教师：把输入框里的姓名加入所有学科行的候选项"""
         name=self.new_teacher_input.text().strip()
         if not name:
-            Toast.error("请输入老师姓名","",parent=self,duration=2000)
+            Toast.error("请输入教师姓名","",parent=self,duration=2000)
             return
         if name in self.teachers:
-            Toast.warning("老师已存在",f"名单里已经有“{name}”了，可直接在学科里勾选",parent=self,duration=2000)
-        else:
-            self.teachers.append(name)
-            Toast.success("已添加老师",f"“{name}”已加入候选项，请在对应学科里勾选",parent=self,duration=2000)
+            Toast.error("教师重复",f"名单里已经有“{name}”了",parent=self,duration=3000)
+            return
+        self.teachers.append(name)
         for row in self.rows:
             row.add_teacher_option([name])
         self.new_teacher_input.clear()
+        Toast.success("已添加老师",f"“{name}”已加入候选项，请在对应学科里勾选",parent=self,duration=2000)
+
+    # ------------------------------------------------------------------
+    # 滚动时卸掉对话框阴影，减少每帧的离屏重绘
+    # ------------------------------------------------------------------
+    def drop_shadow(self):
+        if self.widget.graphicsEffect() is not None:
+            self.widget.setGraphicsEffect(None)
+        self.shadow_restore_timer.start()
+
+    def restore_shadow(self):
+        # 对话框已经关掉了就不用再装回去，避免改到关闭动画用的透明度效果
+        if not self.isVisible() or self.widget.graphicsEffect() is not None:
+            return
+        self.setShadowEffect(60,(0,10),QColor(0,0,0,50))
 
     # ------------------------------------------------------------------
     # 校验
@@ -627,261 +680,265 @@ class TeacherMsgbox(MessageBoxBase):
 # =====================================================================
 # 课程信息页面
 # =====================================================================
-class Classes(QFrame):
+class Classes(PagedPage):
     def __init__(self,parent=None):
         try:
-            super().__init__(parent=parent)
-            self.setObjectName("Classes")
+            # 顶部导航、堆叠分页与 add_page / switch_page / create_page 都在基类里
+            super().__init__(parent=parent,objectName="Classes")
             # 是否有改过但还没重启生效的修改
             self.pending_restart=False
 
-            main_layout=QVBoxLayout(self)
-            main_layout.setContentsMargins(20,20,0,0)
+            self.add_page("import",FluentIcon.FOLDER,"从文件导入",self.build_import_page())
+            self.add_page("grade",FluentIcon.FLAG,"年级",self.build_grade_page())
+            self.add_page("class",FluentIcon.BOOK_SHELF,"班级",self.build_class_page())
+            self.add_page("subject",FluentIcon.EDUCATION,"学科",self.build_subject_page())
+            self.add_page("teacher",FluentIcon.PEOPLE,"任课教师",self.build_teacher_page())
 
-            self.scroll_area=SingleDirectionScrollArea(orient=Qt.Vertical)
-            self.scroll_area.setStyleSheet("QScrollArea{background: transparent; border: none}")
-            self.scroll_area.setWidgetResizable(True)
+            self.switch_page("import")
+            self.refresh_all()
 
-            view=QWidget()
-            view.setStyleSheet("QWidget{background: transparent}")
-            self.layout=QVBoxLayout(view)
-
-            self.title=title("课程信息",self,self.layout,10)
-            write("在这里创建和调整年级、班级与任课教师的信息，也可以直接上传 Excel 文件批量导入。\n修改完成后需要重启应用才会生效。",self,self.layout,0)
-
-            self.restart_banner=WarningBanner(self)
-            add_widget(self.restart_banner,self.layout)
-
-            self.restart_layout=QHBoxLayout()
-            self.layout.addLayout(self.restart_layout)
-            self.restart_button=button("立即重启",self,self.restart_layout)
+            # 待生效提示：有改动后才出现
+            self.pending_bar=QWidget()
+            pending_layout=QHBoxLayout(self.pending_bar)
+            pending_layout.setContentsMargins(0,0,0,0)
+            self.restart_banner=WarningBanner(self.pending_bar)
+            pending_layout.addWidget(self.restart_banner,1)
+            self.restart_button=button("立即重启",self.pending_bar,pending_layout,0)
             self.restart_button.setIcon(FluentIcon.SYNC)
             self.restart_button.setFixedSize(130,40)
-            self.restart_button.setEnabled(False)
             self.restart_button.clicked.connect(self.restart_now)
-            self.restart_layout.addStretch(1)
-            self.layout.addSpacing(10)
-
-            add_widget(SeparatorWidget(orient=Qt.Horizontal),self.layout)
-
-            # ---------------- 从文件导入 ----------------
-            biggersubheader("从文件导入",self,self.layout)
-            self.user_info_card=SettingCard(icon=FluentIcon.INFO,title="课程信息文件",content="存储任课老师及课时、班级信息的表格。同一格填多位老师（如“张三 李四”）即为联合授课")
-            add_widget(self.user_info_card,self.layout)
-
-            self.download_template_button=button("下载导入模板",self,self.user_info_card.layout())
-            self.download_template_button.setFixedSize(150,35)
-            self.download_template_button.setIcon(FluentIcon.DOWNLOAD)
-            self.download_template_button.clicked.connect(self.download_template)
-
-            self.upload_button=button("上传课程信息文件",self,self.user_info_card.layout())
-            self.upload_button.setFixedSize(180,35)
-            self.upload_button.setIcon(FluentIcon.FOLDER)
-            self.upload_button.clicked.connect(self.upload_lessons_info)
-
-            add_widget(SeparatorWidget(orient=Qt.Horizontal),self.layout)
-
-            # ---------------- 年级信息 ----------------
-            subheader("年级信息",self,self.layout)
-
-            grade_operations_layout=QHBoxLayout()
-            self.layout.addLayout(grade_operations_layout)
-
-            self.add_grade_button=button("添加年级",self,grade_operations_layout,0)
-            self.add_grade_button.setIcon(FluentIcon.ADD)
-            self.add_grade_button.setFixedWidth(200)
-            self.add_grade_button.clicked.connect(self.add_grade)
-
-            self.edit_grade_button=button("编辑年级",self,grade_operations_layout,0)
-            self.edit_grade_button.setIcon(FluentIcon.EDIT)
-            self.edit_grade_button.setFixedWidth(200)
-            self.edit_grade_button.setEnabled(False)
-            self.edit_grade_button.clicked.connect(self.edit_grade)
-
-            self.del_grade_button=button("删除年级",self,grade_operations_layout,50)
-            self.del_grade_button.setIcon(FluentIcon.DELETE)
-            self.del_grade_button.setFixedWidth(200)
-            self.del_grade_button.setEnabled(False)
-            self.del_grade_button.clicked.connect(self.del_grade)
-
-            self.grade_up_button=TransparentToolButton()
-            self.grade_up_button.setIcon(FluentIcon.UP)
-            self.grade_up_button.setToolTip("上移")
-            self.grade_up_button.setEnabled(False)
-            self.grade_up_button.clicked.connect(lambda:self.change_grade_pos("up"))
-            add_widget(self.grade_up_button,grade_operations_layout)
-
-            self.grade_down_button=TransparentToolButton()
-            self.grade_down_button.setIcon(FluentIcon.DOWN)
-            self.grade_down_button.setToolTip("下移")
-            self.grade_down_button.setEnabled(False)
-            self.grade_down_button.clicked.connect(lambda:self.change_grade_pos("down"))
-            add_widget(self.grade_down_button,grade_operations_layout)
-
-            self.grade_table=LineTableWidget()
-            self.grade_table.setColumnCount(2)
-            self.grade_table.setHorizontalHeaderLabels(["年级名称","所含班级"])
-            self.grade_table.setColumnWidth(1,1000)
-            self.grade_table.verticalHeader().hide()
-            self.grade_table.setEditTriggers(TableWidget.NoEditTriggers)
-            self.grade_table.clicked.connect(self.refresh_grade_button)
-            self.grade_table.itemDoubleClicked.connect(self.edit_grade)
-            self.grade_table.setContextMenuPolicy(Qt.CustomContextMenu)
-            self.grade_table.customContextMenuRequested.connect(self.show_grade_menu)
-            self.show_grades()
-            add_widget(self.grade_table,self.layout)
-
-            grade_operations_layout.addStretch(1)
-            add_widget(SeparatorWidget(orient=Qt.Horizontal),self.layout)
-
-            # ---------------- 班级信息 ----------------
-            subheader("班级信息",self,self.layout)
-
-            class_operations_layout=QHBoxLayout()
-            self.layout.addLayout(class_operations_layout)
-
-            self.add_class_button=button("添加班级",self,class_operations_layout,0)
-            self.add_class_button.setIcon(FluentIcon.ADD)
-            self.add_class_button.setFixedWidth(200)
-            self.add_class_button.clicked.connect(self.add_class)
-
-            self.edit_class_button=button("编辑班级",self,class_operations_layout,0)
-            self.edit_class_button.setIcon(FluentIcon.EDIT)
-            self.edit_class_button.setFixedWidth(200)
-            self.edit_class_button.setEnabled(False)
-            self.edit_class_button.clicked.connect(self.edit_class)
-
-            self.del_class_button=button("删除班级",self,class_operations_layout)
-            self.del_class_button.setIcon(FluentIcon.DELETE)
-            self.del_class_button.setFixedWidth(200)
-            self.del_class_button.setEnabled(False)
-            self.del_class_button.clicked.connect(self.del_class)
-            class_operations_layout.addStretch(1)
-
-            self.class_table=LineTableWidget()
-            self.class_table.setColumnCount(4)
-            self.class_table.setHorizontalHeaderLabels(["班级","所属年级","学科","每周课时"])
-            self.class_table.setColumnWidth(0,200)
-            self.class_table.setColumnWidth(1,200)
-            self.class_table.setColumnWidth(2,600)
-            self.class_table.setColumnWidth(3,150)
-            self.class_table.verticalHeader().hide()
-            self.class_table.setEditTriggers(TableWidget.NoEditTriggers)
-            self.class_table.itemSelectionChanged.connect(self.refresh_class_button)
-            self.class_table.itemDoubleClicked.connect(self.edit_class)
-            self.class_table.setContextMenuPolicy(Qt.CustomContextMenu)
-            self.class_table.customContextMenuRequested.connect(self.show_class_menu)
-            add_widget(self.class_table,self.layout)
-
-            add_widget(SeparatorWidget(orient=Qt.Horizontal),self.layout)
-
-            # ---------------- 学科信息 ----------------
-            subheader("学科信息",self,self.layout)
-            write("学科的排列顺序即课程表里各学科列的顺序，可用右侧按钮上下调整。",self,self.layout,10)
-
-            subject_operations_layout=QHBoxLayout()
-            self.layout.addLayout(subject_operations_layout)
-
-            self.add_subject_button=button("添加学科",self,subject_operations_layout,0)
-            self.add_subject_button.setIcon(FluentIcon.ADD)
-            self.add_subject_button.setFixedWidth(200)
-            self.add_subject_button.clicked.connect(self.add_subject)
-
-            self.rename_subject_button=button("重命名学科",self,subject_operations_layout,0)
-            self.rename_subject_button.setIcon(FluentIcon.EDIT)
-            self.rename_subject_button.setFixedWidth(200)
-            self.rename_subject_button.setEnabled(False)
-            self.rename_subject_button.clicked.connect(self.edit_subject)
-
-            self.del_subject_button=button("删除学科",self,subject_operations_layout,50)
-            self.del_subject_button.setIcon(FluentIcon.DELETE)
-            self.del_subject_button.setFixedWidth(200)
-            self.del_subject_button.setEnabled(False)
-            self.del_subject_button.clicked.connect(self.del_subject)
-
-            self.subject_up_button=TransparentToolButton()
-            self.subject_up_button.setIcon(FluentIcon.UP)
-            self.subject_up_button.setToolTip("上移")
-            self.subject_up_button.setEnabled(False)
-            self.subject_up_button.clicked.connect(lambda:self.change_subject_pos("up"))
-            add_widget(self.subject_up_button,subject_operations_layout)
-
-            self.subject_down_button=TransparentToolButton()
-            self.subject_down_button.setIcon(FluentIcon.DOWN)
-            self.subject_down_button.setToolTip("下移")
-            self.subject_down_button.setEnabled(False)
-            self.subject_down_button.clicked.connect(lambda:self.change_subject_pos("down"))
-            add_widget(self.subject_down_button,subject_operations_layout)
-
-            self.subject_table=LineTableWidget()
-            self.subject_table.setColumnCount(4)
-            self.subject_table.setHorizontalHeaderLabels(["学科名称","任教班级","任课教师","每周总课时"])
-            self.subject_table.setColumnWidth(0,140)
-            self.subject_table.setColumnWidth(1,260)
-            self.subject_table.setColumnWidth(2,380)
-            self.subject_table.setColumnWidth(3,120)
-            # 班级/老师较多时不换行撑高行高，超出部分显示省略号，完整内容看悬停提示
-            self.subject_table.setWordWrap(False)
-            self.subject_table.verticalHeader().hide()
-            self.subject_table.setEditTriggers(TableWidget.NoEditTriggers)
-            self.subject_table.itemSelectionChanged.connect(self.refresh_subject_button)
-            self.subject_table.itemDoubleClicked.connect(self.edit_subject)
-            self.subject_table.setContextMenuPolicy(Qt.CustomContextMenu)
-            self.subject_table.customContextMenuRequested.connect(self.show_subject_menu)
-            add_widget(self.subject_table,self.layout)
-
-            subject_operations_layout.addStretch(1)
-            add_widget(SeparatorWidget(orient=Qt.Horizontal),self.layout)
-
-            # ---------------- 任课教师 ----------------
-            subheader("任课教师",self,self.layout)
-
-            teacher_operations_layout=QHBoxLayout()
-            self.layout.addLayout(teacher_operations_layout)
-
-            self.add_teacher_button=button("添加教师",self,teacher_operations_layout,0)
-            self.add_teacher_button.setIcon(FluentIcon.ADD)
-            self.add_teacher_button.setFixedWidth(200)
-            self.add_teacher_button.clicked.connect(self.add_teacher)
-
-            self.rename_teacher_button=button("重命名教师",self,teacher_operations_layout,0)
-            self.rename_teacher_button.setIcon(FluentIcon.EDIT)
-            self.rename_teacher_button.setFixedWidth(200)
-            self.rename_teacher_button.setEnabled(False)
-            self.rename_teacher_button.clicked.connect(self.rename_teacher)
-
-            self.del_teacher_button=button("删除教师",self,teacher_operations_layout)
-            self.del_teacher_button.setIcon(FluentIcon.DELETE)
-            self.del_teacher_button.setFixedWidth(200)
-            self.del_teacher_button.setEnabled(False)
-            self.del_teacher_button.clicked.connect(self.del_teacher)
-            teacher_operations_layout.addStretch(1)
-
-            self.teacher_table=LineTableWidget()
-            self.teacher_table.setColumnCount(4)
-            self.teacher_table.setHorizontalHeaderLabels(["教师","任教学科","任教班级","每周课时"])
-            self.teacher_table.setColumnWidth(0,200)
-            self.teacher_table.setColumnWidth(1,300)
-            self.teacher_table.setColumnWidth(2,600)
-            self.teacher_table.setColumnWidth(3,150)
-            self.teacher_table.verticalHeader().hide()
-            self.teacher_table.setEditTriggers(TableWidget.NoEditTriggers)
-            self.teacher_table.itemSelectionChanged.connect(self.refresh_teacher_button)
-            self.teacher_table.itemDoubleClicked.connect(self.rename_teacher)
-            self.teacher_table.setContextMenuPolicy(Qt.CustomContextMenu)
-            self.teacher_table.customContextMenuRequested.connect(self.show_teacher_menu)
-            add_widget(self.teacher_table,self.layout)
-
-            self.layout.addStretch(1)
-            self.scroll_area.setWidget(view)
-            main_layout.addWidget(self.scroll_area)
-
-            self.refresh_all()
+            self.pending_bar.setVisible(False)
+            add_widget(self.pending_bar,self.main_layout,10)
             logging.info("课程信息页面加载完成")
         except Exception as error:
-            e=traceback.format_exc()
-            logging.critical(f"加载课程信息页面出错：\n{e}")
-            show_error(self,error)
+            log_page_error(self,error,"课程信息页面")
+
+    # ------------------------------------------------------------------
+    # 各分页内容
+    # ------------------------------------------------------------------
+    def build_import_page(self)->QWidget:
+        page,layout=self.create_page("从文件导入","上传存储任课老师及课时、班级信息的表格，导入后会覆盖当前课程信息并自动重启应用。")
+        self.user_info_card=SettingCard(icon=FluentIcon.INFO,title="课程信息文件",content="同一格填多位老师（如“张三 李四”）即为联合授课")
+        add_widget(self.user_info_card,layout)
+
+        self.download_template_button=button("下载导入模板",page,self.user_info_card.layout())
+        self.download_template_button.setFixedSize(150,35)
+        self.download_template_button.setIcon(FluentIcon.DOWNLOAD)
+        self.download_template_button.clicked.connect(self.download_template)
+
+        self.upload_button=button("上传课程信息文件",page,self.user_info_card.layout())
+        self.upload_button.setFixedSize(180,35)
+        self.upload_button.setIcon(FluentIcon.FOLDER)
+        self.upload_button.clicked.connect(self.upload_lessons_info)
+
+        # 模板格式说明
+        self.template_card=CardWidget(page)
+        template_layout=QVBoxLayout(self.template_card)
+        template_layout.setContentsMargins(20,16,20,16)
+        subheader("模板格式",self.template_card,template_layout,10)
+        self.template_image=FillWidthImageLabel("images/template.png",self.template_card)
+        self.template_image.setBorderRadius(8,8,8,8)
+        # setImage 会把尺寸固定成原图大小，这里放开宽度让图片随卡片一起伸缩
+        self.template_image.setMinimumWidth(0)
+        self.template_image.setMaximumWidth(16777215)
+        self.template_image.setSizePolicy(QSizePolicy.Expanding,QSizePolicy.Fixed)
+        template_layout.addWidget(self.template_image)
+        add_widget(self.template_card,layout)
+
+        layout.addStretch(1)
+        return page
+
+    def build_grade_page(self)->QWidget:
+        page,layout=self.create_page("年级信息","年级用于按年段生成课表，一个班级只属于一个年级。")
+
+        grade_operations_layout=QHBoxLayout()
+        layout.addLayout(grade_operations_layout)
+
+        self.add_grade_button=button("添加年级",page,grade_operations_layout,0)
+        self.add_grade_button.setIcon(FluentIcon.ADD)
+        self.add_grade_button.setFixedWidth(200)
+        self.add_grade_button.clicked.connect(self.add_grade)
+
+        self.edit_grade_button=button("编辑年级",page,grade_operations_layout,0)
+        self.edit_grade_button.setIcon(FluentIcon.EDIT)
+        self.edit_grade_button.setFixedWidth(200)
+        self.edit_grade_button.setEnabled(False)
+        self.edit_grade_button.clicked.connect(self.edit_grade)
+
+        self.del_grade_button=button("删除年级",page,grade_operations_layout,50)
+        self.del_grade_button.setIcon(FluentIcon.DELETE)
+        self.del_grade_button.setFixedWidth(200)
+        self.del_grade_button.setEnabled(False)
+        self.del_grade_button.clicked.connect(self.del_grade)
+
+        self.grade_up_button=TransparentToolButton()
+        self.grade_up_button.setIcon(FluentIcon.UP)
+        self.grade_up_button.setToolTip("上移")
+        self.grade_up_button.setEnabled(False)
+        self.grade_up_button.clicked.connect(lambda:self.change_grade_pos("up"))
+        add_widget(self.grade_up_button,grade_operations_layout)
+
+        self.grade_down_button=TransparentToolButton()
+        self.grade_down_button.setIcon(FluentIcon.DOWN)
+        self.grade_down_button.setToolTip("下移")
+        self.grade_down_button.setEnabled(False)
+        self.grade_down_button.clicked.connect(lambda:self.change_grade_pos("down"))
+        add_widget(self.grade_down_button,grade_operations_layout)
+        grade_operations_layout.addStretch(1)
+
+        self.grade_table=LineTableWidget()
+        self.grade_table.setColumnCount(2)
+        self.grade_table.setHorizontalHeaderLabels(["年级名称","所含班级"])
+        self.grade_table.setColumnWidth(1,1000)
+        self.grade_table.verticalHeader().hide()
+        self.grade_table.setEditTriggers(TableWidget.NoEditTriggers)
+        self.grade_table.clicked.connect(self.refresh_grade_button)
+        self.grade_table.itemDoubleClicked.connect(self.edit_grade)
+        self.grade_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.grade_table.customContextMenuRequested.connect(self.show_grade_menu)
+        add_widget(self.grade_table,layout)
+
+        return page
+
+    def build_class_page(self)->QWidget:
+        page,layout=self.create_page("班级信息","每个班级在这里设置各学科的任课老师与每周课时。")
+
+        class_operations_layout=QHBoxLayout()
+        layout.addLayout(class_operations_layout)
+
+        self.add_class_button=button("添加班级",page,class_operations_layout,0)
+        self.add_class_button.setIcon(FluentIcon.ADD)
+        self.add_class_button.setFixedWidth(200)
+        self.add_class_button.clicked.connect(self.add_class)
+
+        self.edit_class_button=button("编辑班级",page,class_operations_layout,0)
+        self.edit_class_button.setIcon(FluentIcon.EDIT)
+        self.edit_class_button.setFixedWidth(200)
+        self.edit_class_button.setEnabled(False)
+        self.edit_class_button.clicked.connect(self.edit_class)
+
+        self.del_class_button=button("删除班级",page,class_operations_layout)
+        self.del_class_button.setIcon(FluentIcon.DELETE)
+        self.del_class_button.setFixedWidth(200)
+        self.del_class_button.setEnabled(False)
+        self.del_class_button.clicked.connect(self.del_class)
+        class_operations_layout.addStretch(1)
+
+        self.class_table=LineTableWidget()
+        self.class_table.setColumnCount(4)
+        self.class_table.setHorizontalHeaderLabels(["班级","所属年级","学科","每周课时"])
+        self.class_table.setColumnWidth(0,200)
+        self.class_table.setColumnWidth(1,200)
+        self.class_table.setColumnWidth(2,600)
+        self.class_table.setColumnWidth(3,150)
+        self.class_table.verticalHeader().hide()
+        self.class_table.setEditTriggers(TableWidget.NoEditTriggers)
+        self.class_table.itemSelectionChanged.connect(self.refresh_class_button)
+        self.class_table.itemDoubleClicked.connect(self.edit_class)
+        self.class_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.class_table.customContextMenuRequested.connect(self.show_class_menu)
+        add_widget(self.class_table,layout)
+
+        return page
+
+    def build_subject_page(self)->QWidget:
+        page,layout=self.create_page("学科信息","学科的排列顺序即课程表里各学科列的顺序，可用右侧按钮上下调整。")
+
+        subject_operations_layout=QHBoxLayout()
+        layout.addLayout(subject_operations_layout)
+
+        self.add_subject_button=button("添加学科",page,subject_operations_layout,0)
+        self.add_subject_button.setIcon(FluentIcon.ADD)
+        self.add_subject_button.setFixedWidth(200)
+        self.add_subject_button.clicked.connect(self.add_subject)
+
+        self.rename_subject_button=button("重命名学科",page,subject_operations_layout,0)
+        self.rename_subject_button.setIcon(FluentIcon.EDIT)
+        self.rename_subject_button.setFixedWidth(200)
+        self.rename_subject_button.setEnabled(False)
+        self.rename_subject_button.clicked.connect(self.edit_subject)
+
+        self.del_subject_button=button("删除学科",page,subject_operations_layout,50)
+        self.del_subject_button.setIcon(FluentIcon.DELETE)
+        self.del_subject_button.setFixedWidth(200)
+        self.del_subject_button.setEnabled(False)
+        self.del_subject_button.clicked.connect(self.del_subject)
+
+        self.subject_up_button=TransparentToolButton()
+        self.subject_up_button.setIcon(FluentIcon.UP)
+        self.subject_up_button.setToolTip("上移")
+        self.subject_up_button.setEnabled(False)
+        self.subject_up_button.clicked.connect(lambda:self.change_subject_pos("up"))
+        add_widget(self.subject_up_button,subject_operations_layout)
+
+        self.subject_down_button=TransparentToolButton()
+        self.subject_down_button.setIcon(FluentIcon.DOWN)
+        self.subject_down_button.setToolTip("下移")
+        self.subject_down_button.setEnabled(False)
+        self.subject_down_button.clicked.connect(lambda:self.change_subject_pos("down"))
+        add_widget(self.subject_down_button,subject_operations_layout)
+        subject_operations_layout.addStretch(1)
+
+        self.subject_table=LineTableWidget()
+        self.subject_table.setColumnCount(4)
+        self.subject_table.setHorizontalHeaderLabels(["学科名称","任教班级","任课教师","每周总课时"])
+        self.subject_table.setColumnWidth(0,140)
+        self.subject_table.setColumnWidth(1,260)
+        self.subject_table.setColumnWidth(2,380)
+        self.subject_table.setColumnWidth(3,120)
+        # 班级/老师较多时不换行撑高行高，超出部分显示省略号，完整内容看悬停提示
+        self.subject_table.setWordWrap(False)
+        self.subject_table.verticalHeader().hide()
+        self.subject_table.setEditTriggers(TableWidget.NoEditTriggers)
+        self.subject_table.itemSelectionChanged.connect(self.refresh_subject_button)
+        self.subject_table.itemDoubleClicked.connect(self.edit_subject)
+        self.subject_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.subject_table.customContextMenuRequested.connect(self.show_subject_menu)
+        add_widget(self.subject_table,layout)
+
+        return page
+
+    def build_teacher_page(self)->QWidget:
+        page,layout=self.create_page("任课教师","教师名单来自各班的课程信息，也可以先添加教师，再回到“班级”页勾选。")
+
+        teacher_operations_layout=QHBoxLayout()
+        layout.addLayout(teacher_operations_layout)
+
+        self.add_teacher_button=button("添加教师",page,teacher_operations_layout,0)
+        self.add_teacher_button.setIcon(FluentIcon.ADD)
+        self.add_teacher_button.setFixedWidth(200)
+        self.add_teacher_button.clicked.connect(self.add_teacher)
+
+        self.rename_teacher_button=button("重命名教师",page,teacher_operations_layout,0)
+        self.rename_teacher_button.setIcon(FluentIcon.EDIT)
+        self.rename_teacher_button.setFixedWidth(200)
+        self.rename_teacher_button.setEnabled(False)
+        self.rename_teacher_button.clicked.connect(self.rename_teacher)
+
+        self.del_teacher_button=button("删除教师",page,teacher_operations_layout)
+        self.del_teacher_button.setIcon(FluentIcon.DELETE)
+        self.del_teacher_button.setFixedWidth(200)
+        self.del_teacher_button.setEnabled(False)
+        self.del_teacher_button.clicked.connect(self.del_teacher)
+        teacher_operations_layout.addStretch(1)
+
+        self.teacher_table=LineTableWidget()
+        self.teacher_table.setColumnCount(4)
+        self.teacher_table.setHorizontalHeaderLabels(["教师","任教学科","任教班级","每周课时"])
+        self.teacher_table.setColumnWidth(0,200)
+        self.teacher_table.setColumnWidth(1,300)
+        self.teacher_table.setColumnWidth(2,600)
+        self.teacher_table.setColumnWidth(3,150)
+        self.teacher_table.setWordWrap(False)
+        self.teacher_table.verticalHeader().hide()
+        self.teacher_table.setEditTriggers(TableWidget.NoEditTriggers)
+        self.teacher_table.itemSelectionChanged.connect(self.refresh_teacher_button)
+        self.teacher_table.itemDoubleClicked.connect(self.rename_teacher)
+        self.teacher_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.teacher_table.customContextMenuRequested.connect(self.show_teacher_menu)
+        add_widget(self.teacher_table,layout)
+
+        return page
 
     # ------------------------------------------------------------------
     # 刷新界面
@@ -899,6 +956,7 @@ class Classes(QFrame):
     def mark_pending(self):
         """记录“已修改、待重启生效”的状态"""
         self.pending_restart=True
+        self.pending_bar.setVisible(True)
         self.restart_button.setEnabled(True)
         self.restart_banner.show_warning("课程信息已修改",[
             "新的课程信息需要重启应用后才会生效",
@@ -932,7 +990,6 @@ class Classes(QFrame):
     def show_grades(self):
         grades=cfg.grades_info.value or {}
         self.grade_table.setRowCount(len(grades))
-        self.grade_table.setFixedHeight(min(400,len(grades)*50+50))
         r=0
         for grade,classes in grades.items():
             name_item=QTableWidgetItem(grade)
@@ -944,19 +1001,11 @@ class Classes(QFrame):
             r+=1
 
     def show_grade_menu(self,pos):
-        item=self.grade_table.itemAt(pos)
-        if not item:
-            return
-        self.grade_table.setCurrentItem(item)
-        self.refresh_grade_button()
-        menu=RoundMenu(parent=self)
-        edit_action=Action(FluentIcon.EDIT,"编辑")
-        edit_action.triggered.connect(self.edit_grade)
-        menu.addAction(edit_action)
-        delete_action=Action(FluentIcon.DELETE,"删除")
-        delete_action.triggered.connect(self.del_grade)
-        menu.addAction(delete_action)
-        menu.exec(self.grade_table.viewport().mapToGlobal(pos),aniType=MenuAnimationType.DROP_DOWN)
+        show_item_menu(
+            self.grade_table,pos,self,
+            edit_text="编辑",edit_slot=self.edit_grade,delete_slot=self.del_grade,
+            on_selected=self.refresh_grade_button
+        )
 
     def add_grade(self):
         msgbox=GradeMsgbox(self)
@@ -1041,7 +1090,6 @@ class Classes(QFrame):
         lessons=config_lessons()
         subjects=config_subjects()
         self.class_table.setRowCount(len(lessons))
-        self.class_table.setFixedHeight(min(420,len(lessons)*50+50))
         for r,row in enumerate(lessons):
             class_name=str(row.get("班级",""))
             class_subjects=[subject for subject in subjects if row_teachers(row,subject)]
@@ -1058,19 +1106,11 @@ class Classes(QFrame):
                 self.class_table.setItem(r,c,item)
 
     def show_class_menu(self,pos):
-        item=self.class_table.itemAt(pos)
-        if not item:
-            return
-        self.class_table.setCurrentItem(item)
-        self.refresh_class_button()
-        menu=RoundMenu(parent=self)
-        edit_action=Action(FluentIcon.EDIT,"编辑")
-        edit_action.triggered.connect(self.edit_class)
-        menu.addAction(edit_action)
-        delete_action=Action(FluentIcon.DELETE,"删除")
-        delete_action.triggered.connect(self.del_class)
-        menu.addAction(delete_action)
-        menu.exec(self.class_table.viewport().mapToGlobal(pos),aniType=MenuAnimationType.DROP_DOWN)
+        show_item_menu(
+            self.class_table,pos,self,
+            edit_text="编辑",edit_slot=self.edit_class,delete_slot=self.del_class,
+            on_selected=self.refresh_class_button
+        )
 
     def add_class(self):
         msgbox=ClassMsgbox(self)
@@ -1161,7 +1201,6 @@ class Classes(QFrame):
     def show_subjects(self):
         subjects=config_subjects()
         self.subject_table.setRowCount(len(subjects))
-        self.subject_table.setFixedHeight(min(420,len(subjects)*50+50))
         for r,subject in enumerate(subjects):
             classes,teachers,hours=subject_statistics(subject)
             values=[
@@ -1177,19 +1216,11 @@ class Classes(QFrame):
                 self.subject_table.setItem(r,c,item)
 
     def show_subject_menu(self,pos):
-        item=self.subject_table.itemAt(pos)
-        if not item:
-            return
-        self.subject_table.setCurrentItem(item)
-        self.refresh_subject_button()
-        menu=RoundMenu(parent=self)
-        rename_action=Action(FluentIcon.EDIT,"重命名")
-        rename_action.triggered.connect(self.edit_subject)
-        menu.addAction(rename_action)
-        delete_action=Action(FluentIcon.DELETE,"删除")
-        delete_action.triggered.connect(self.del_subject)
-        menu.addAction(delete_action)
-        menu.exec(self.subject_table.viewport().mapToGlobal(pos),aniType=MenuAnimationType.DROP_DOWN)
+        show_item_menu(
+            self.subject_table,pos,self,
+            edit_text="重命名",edit_slot=self.edit_subject,delete_slot=self.del_subject,
+            on_selected=self.refresh_subject_button
+        )
 
     def add_subject(self):
         subjects=config_subjects()
@@ -1297,7 +1328,6 @@ class Classes(QFrame):
     def show_teachers(self):
         teachers=config_teachers()
         self.teacher_table.setRowCount(len(teachers))
-        self.teacher_table.setFixedHeight(min(420,len(teachers)*50+50))
         for r,teacher in enumerate(teachers):
             subjects,classes,hours=self.teacher_statistics(teacher)
             values=[
@@ -1312,19 +1342,11 @@ class Classes(QFrame):
                 self.teacher_table.setItem(r,c,item)
 
     def show_teacher_menu(self,pos):
-        item=self.teacher_table.itemAt(pos)
-        if not item:
-            return
-        self.teacher_table.setCurrentItem(item)
-        self.refresh_teacher_button()
-        menu=RoundMenu(parent=self)
-        rename_action=Action(FluentIcon.EDIT,"重命名")
-        rename_action.triggered.connect(self.rename_teacher)
-        menu.addAction(rename_action)
-        delete_action=Action(FluentIcon.DELETE,"删除")
-        delete_action.triggered.connect(self.del_teacher)
-        menu.addAction(delete_action)
-        menu.exec(self.teacher_table.viewport().mapToGlobal(pos),aniType=MenuAnimationType.DROP_DOWN)
+        show_item_menu(
+            self.teacher_table,pos,self,
+            edit_text="重命名",edit_slot=self.rename_teacher,delete_slot=self.del_teacher,
+            on_selected=self.refresh_teacher_button
+        )
 
     def add_teacher(self):
         msgbox=TeacherMsgbox(self)

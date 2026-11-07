@@ -9,7 +9,7 @@ from core.timetable_core import save_current_plan, delete_plans
 
 
 class PlanManagerMsgbox(MessageBoxBase):
-    """整合保存/加载/删除课程表方案的操作对话框，模仿 MergeLessonsMsgbox 布局"""
+    """整合保存/加载/删除课程表方案的操作对话框，模仿并课设置页的列表布局"""
 
     def __init__(self, curr_plan_name: str = "", parent=None):
         super().__init__(parent=parent)
