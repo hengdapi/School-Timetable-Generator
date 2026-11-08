@@ -10,9 +10,6 @@
 """
 import shutil
 
-from PySide6.QtCore import QTimer
-from PySide6.QtGui import QColor
-
 from locals import *
 from pages.ui_widgets import PagedPage,WarningBanner,log_page_error,show_item_menu
 

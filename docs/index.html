@@ -336,12 +336,13 @@
     <h1>课程表生成器 &middot; 让排课<span>简单一点</span></h1>
     <p class="tagline">专为学校打造的智能排课工具，几分钟搞定全校课表</p>
     <div class="hero-badges">
+      <span class="badge">v2.3.0</span>
       <span class="badge">GPL v3.0</span>
       <span class="badge">Python 3.9+</span>
       <span class="badge">PySide6</span>
     </div>
     <div class="hero-actions">
-      <a class="hero-cta" id="btnDownload" href="https://gitcode.com/hengdapi/School-Timetable-Generator/releases/download/v2.2.0/School-Timetable-Generator-v2.2.0-Windows-x86_64-Setup.exe">
+      <a class="hero-cta" id="btnDownload" href="https://gitcode.com/hengdapi/School-Timetable-Generator/releases/download/v2.3.0/School-Timetable-Generator-v2.3.0-Windows-x86_64-Setup.exe">
         <svg class="hero-cta-gh" viewBox="0 0 24 24" fill="currentColor"><path d="M0 0h11.377v11.372H0zm12.623 0H24v11.372H12.623zM0 12.623h11.377V24H0zm12.623 0H24V24H12.623z"/></svg>
         下载 Windows 版
       </a>
@@ -387,7 +388,7 @@
     <div class="highlight-row reverse reveal">
       <div class="highlight-text">
         <h3><svg class="ico-lg" viewBox="0 0 24 24"><use href="#ico-calendar"/></svg>可视化课表，直观呈现</h3>
-        <p>生成后可清晰查看每个班级的完整课程安排，右侧同步显示当前选中教师的个人课表，一目了然。</p>
+        <p>生成后可清晰查看每个班级的完整课程安排，右侧同步显示当前选中教师的个人课表；联合授课时多位教师纵向排列，一目了然。</p>
         <div class="highlight-tags">
           <span>班级课表</span><span>教师课表</span><span>双栏联动</span>
         </div>
@@ -408,43 +409,58 @@
   </div>
 </section>
 
-<!-- ─── 2.0.0 更新亮点 ─── -->
+<!-- ─── 2.3.0 更新亮点 ─── -->
 <section class="whatsnew-sec">
   <div class="sec-inner">
     <div class="reveal"><div class="sec-label">What's New</div></div>
-    <div class="reveal"><h2 class="sec-title">2.0.0 更新亮点</h2></div>
-    <div class="reveal"><p class="sec-sub">规则引擎全面重构，新增多种规则类型，导出与生成体验同步升级</p></div>
+    <div class="reveal"><h2 class="sec-title">2.3.0 更新亮点</h2></div>
+    <div class="reveal"><p class="sec-sub">从课程信息、排课设置到课表方案，v2.1 以来的功能集中升级</p></div>
     <div class="reveal">
       <div class="whatsnew-grid">
         <div class="whatsnew-card">
           <span class="new-tag">NEW</span>
-          <h4><svg class="ico" viewBox="0 0 24 24"><use href="#ico-grid"/></svg>规则类型扩充至 11 种</h4>
-          <p>新增「每天必排」「保持课时顺序」「老师不能在指定时间排课」等规则，排课约束更细腻，组合出更贴合真实需求的课表。</p>
+          <h4><svg class="ico" viewBox="0 0 24 24"><use href="#ico-sliders"/></svg>分页式排课设置</h4>
+          <p>设置页更名「排课设置」并拆分为课程数量、活动时间、排课规则、并课设置、功能设置、表格样式、导出/导入七个分页，查找更直接。</p>
         </div>
         <div class="whatsnew-card">
           <span class="new-tag">NEW</span>
-          <h4><svg class="ico" viewBox="0 0 24 24"><use href="#ico-target"/></svg>规则支持生效范围</h4>
-          <p>每条规则都能自由指定作用于哪些班级，不同年级、不同学科可采用各自的排课策略，互不干扰。</p>
+          <h4><svg class="ico" viewBox="0 0 24 24"><use href="#ico-clipboard"/></svg>课程信息可视化编辑</h4>
+          <p>年级、班级、任课教师都能在软件内维护，也可上传 Excel 一键替换；同一格填多位老师即开启联合授课。</p>
         </div>
         <div class="whatsnew-card">
           <span class="new-tag">NEW</span>
-          <h4><svg class="ico" viewBox="0 0 24 24"><use href="#ico-file"/></svg>导出 CSES 课表</h4>
-          <p>支持导出 CSES v1 / v2 通用课表交换格式，可直接导入 Class Island、Class Widgets 等班级大屏课表软件。</p>
+          <h4><svg class="ico" viewBox="0 0 24 24"><use href="#ico-link"/></svg>并课设置</h4>
+          <p>两个班可在同一时间上同学科课程，适合合班上课；调课时并课班级的课程会自动联动调整。</p>
         </div>
         <div class="whatsnew-card">
           <span class="new-tag">NEW</span>
-          <h4><svg class="ico" viewBox="0 0 24 24"><use href="#ico-bell"/></svg>生成完成系统通知</h4>
-          <p>排课过程无需守候，生成完成后自动推送系统通知，切到别的窗口也不会错过结果。</p>
+          <h4><svg class="ico" viewBox="0 0 24 24"><use href="#ico-user"/></svg>联合授课</h4>
+          <p>一门课可由多位老师共同任教，排课、规则检查与导出全面适配，右侧教师课表按人数自适应排列。</p>
         </div>
         <div class="whatsnew-card">
           <span class="new-tag">NEW</span>
-          <h4><svg class="ico" viewBox="0 0 24 24"><use href="#ico-alert"/></svg>课程时间冲突检查</h4>
-          <p>配置上下课时间与活动时间时自动检测时间交叉，及时给出警告提示，避免设置互相冲突。</p>
+          <h4><svg class="ico" viewBox="0 0 24 24"><use href="#ico-file"/></svg>统一方案管理</h4>
+          <p>保存、加载、删除课程表方案合并到同一个对话框，支持列表多选与实时刷新，覆盖已有方案时还会给出提示。</p>
         </div>
         <div class="whatsnew-card">
           <span class="new-tag">NEW</span>
-          <h4><svg class="ico" viewBox="0 0 24 24"><use href="#ico-sliders"/></svg>生成功能更细致</h4>
-          <p>减少教师连堂、平均分配课程、允许跨上下午连堂、限制教师同时最大上课数量等选项一应俱全。</p>
+          <h4><svg class="ico" viewBox="0 0 24 24"><use href="#ico-cycle"/></svg>撤销 / 重做</h4>
+          <p>Ctrl+Z / Ctrl+Y 随时回退或恢复操作，生成结果不满意也能放心大胆地继续调整。</p>
+        </div>
+        <div class="whatsnew-card">
+          <span class="new-tag">NEW</span>
+          <h4><svg class="ico" viewBox="0 0 24 24"><use href="#ico-alert"/></svg>一键检查冲突</h4>
+          <p>生成后随时手动检查冲突，结果按原因分类显示，双击冲突项即可跳转到对应位置。</p>
+        </div>
+        <div class="whatsnew-card">
+          <span class="new-tag">NEW</span>
+          <h4><svg class="ico" viewBox="0 0 24 24"><use href="#ico-calendar"/></svg>时间轴编辑</h4>
+          <p>在统一时间轴上拖拽或双击调整课程与活动起止时间，时间交叉会即时提醒，不再来回切页。</p>
+        </div>
+        <div class="whatsnew-card">
+          <span class="new-tag">NEW</span>
+          <h4><svg class="ico" viewBox="0 0 24 24"><use href="#ico-star"/></svg>主题热切换</h4>
+          <p>深浅色跟随系统实时切换；生成进度显示在任务栏，仅在窗口失焦时才弹出系统通知。</p>
         </div>
       </div>
     </div>
@@ -476,10 +492,10 @@
     <div class="reveal"><p class="sec-sub">学校名称、年级信息、上下课时间……所有细节都由你掌控</p></div>
     <div class="reveal">
       <div class="settings-carousel" id="settingsCarousel">
-        <div class="settings-slide"><img src="设置1.png" alt="设置1" onclick="openLightbox(this.src)"><div class="slide-label">导出 / 导入配置 &middot; 课程信息管理</div></div>
-        <div class="settings-slide"><img src="设置2.png" alt="设置2" onclick="openLightbox(this.src)"><div class="slide-label">课程数量 &middot; 年级设置</div></div>
-        <div class="settings-slide"><img src="设置3.png" alt="设置3" onclick="openLightbox(this.src)"><div class="slide-label">生成规则 &middot; 生成功能</div></div>
-        <div class="settings-slide"><img src="设置4.png" alt="设置4" onclick="openLightbox(this.src)"><div class="slide-label">活动信息 &middot; 表格样式</div></div>
+        <div class="settings-slide"><img src="设置1.png" alt="设置1" onclick="openLightbox(this.src)"><div class="slide-label">课程信息 &middot; 导出 / 导入</div></div>
+        <div class="settings-slide"><img src="设置2.png" alt="设置2" onclick="openLightbox(this.src)"><div class="slide-label">课程数量 &middot; 年级信息</div></div>
+        <div class="settings-slide"><img src="设置3.png" alt="设置3" onclick="openLightbox(this.src)"><div class="slide-label">排课规则 &middot; 并课设置</div></div>
+        <div class="settings-slide"><img src="设置4.png" alt="设置4" onclick="openLightbox(this.src)"><div class="slide-label">活动时间 &middot; 表格样式</div></div>
       </div>
     </div>
   </div>
@@ -603,7 +619,7 @@
 <!-- ─── Footer ─── -->
 <footer>
   <div><strong>课程表生成器</strong> &mdash; School Timetable Generator</div>
-  <div>许可证：GPL v3.0 &middot; Copyright &copy; 2026 Hengxiaopi</div>
+  <div>许可证：GPL v3.0 &middot; 当前版本 v2.3.0 &middot; Copyright &copy; 2026 Hengxiaopi</div>
   <div class="divider"></div>
   <div style="font-size:13px">
     使用 <a href="https://github.com/zhiyiYo/PyQt-Fluent-Widgets" target="_blank">QFluentWidgets</a>
